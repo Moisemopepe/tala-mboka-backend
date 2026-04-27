@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import express from "express";
 import jwt from "jsonwebtoken";
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
+import Notification from "../models/Notification.js";
 import Report from "../models/Report.js";
 import User from "../models/User.js";
 
@@ -46,6 +47,39 @@ router.post("/login", async (req, res, next) => {
 });
 
 router.use(requireAuth, requireAdmin);
+
+router.post("/version-notifications", async (req, res, next) => {
+  try {
+    const version = String(req.body.version || "").trim();
+    const adminNotes = String(req.body.adminNotes || "").trim();
+    const userNotes = String(req.body.userNotes || "").trim();
+
+    if (!version || !adminNotes || !userNotes) {
+      return res.status(400).json({ message: "Version, admin notes and user notes are required" });
+    }
+
+    if (adminNotes.length > 2000 || userNotes.length > 2000) {
+      return res.status(400).json({ message: "Version notes cannot exceed 2000 characters" });
+    }
+
+    await Notification.create([
+      {
+        roles: ["admin"],
+        title: `Nouvelle version ${version}`,
+        message: adminNotes
+      },
+      {
+        roles: ["user"],
+        title: `Tala Mboka ${version}`,
+        message: userNotes
+      }
+    ]);
+
+    res.status(201).json({ message: "Notifications de version envoyees." });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.get("/stats", async (_req, res, next) => {
   try {
