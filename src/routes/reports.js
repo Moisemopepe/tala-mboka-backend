@@ -43,6 +43,19 @@ router.get("/", async (req, res, next) => {
   }
 });
 
+router.get("/mine", requireAuth, async (req, res, next) => {
+  try {
+    const reports = await Report.find({ userId: req.user._id })
+      .sort({ createdAt: -1 })
+      .populate("userId", "name phone")
+      .lean({ virtuals: true });
+
+    res.json(reports.map((report) => ({ ...report, likesCount: report.likes?.length || 0 })));
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/:id", async (req, res, next) => {
   try {
     const report = await Report.findById(req.params.id).populate("userId", "name phone");
