@@ -9,6 +9,7 @@ import { fileURLToPath } from "url";
 import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
 import reportRoutes from "./routes/reports.js";
+import { ensureConfiguredAdmin } from "./services/adminBootstrap.js";
 
 dotenv.config();
 
@@ -39,7 +40,8 @@ const port = process.env.PORT || 5000;
 
 mongoose
   .connect(process.env.MONGODB_URI)
-  .then(() => {
+  .then(async () => {
+    await ensureConfiguredAdmin();
     app.listen(port, () => {
       console.log(`Tala Mboka API running on port ${port}`);
     });
