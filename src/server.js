@@ -8,6 +8,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
+import notificationRoutes from "./routes/notifications.js";
 import reportRoutes from "./routes/reports.js";
 import { ensureConfiguredAdmin } from "./services/adminBootstrap.js";
 
@@ -29,6 +30,7 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api", authRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/notifications", notificationRoutes);
 app.use("/api/reports", reportRoutes);
 
 app.use((err, _req, res, _next) => {
