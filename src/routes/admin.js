@@ -1,4 +1,6 @@
+import bcrypt from "bcryptjs";
 import express from "express";
+import jwt from "jsonwebtoken";
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
 import Report from "../models/Report.js";
 import User from "../models/User.js";
@@ -6,6 +8,42 @@ import User from "../models/User.js";
 const router = express.Router();
 const statuses = ["pending", "in_progress", "resolved"];
 const categories = ["road", "water", "electricity", "waste", "security"];
+
+function signToken(user) {
+  return jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
+}
+
+router.post("/login", async (req, res, next) => {
+  try {
+    const { phone, password } = req.body;
+
+    if (!phone || !password) {
+      return res.status(400).json({ message: "Phone and password are required" });
+    }
+
+    const user = await User.findOne({ phone });
+    if (!user) {
+      return res.status(401).json({ message: "Invalid phone or password" });
+    }
+
+    if (user.banned) {
+      return res.status(403).json({ message: "Account banned" });
+    }
+
+    if (user.role !== "admin") {
+      return res.status(403).json({ message: "Admin access required" });
+    }
+
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) {
+      return res.status(401).json({ message: "Invalid phone or password" });
+    }
+
+    res.json({ token: signToken(user), user });
+  } catch (error) {
+    next(error);
+  }
+});
 
 router.use(requireAuth, requireAdmin);
 
