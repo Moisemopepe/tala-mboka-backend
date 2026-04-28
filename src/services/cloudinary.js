@@ -1,22 +1,31 @@
 import { v2 as cloudinary } from "cloudinary";
 
+function clean(value = "") {
+  return String(value).trim();
+}
+
 function hasCloudinaryConfig() {
   return (
-    Boolean(process.env.CLOUDINARY_URL) ||
-    (Boolean(process.env.CLOUDINARY_CLOUD_NAME) &&
-      Boolean(process.env.CLOUDINARY_API_KEY) &&
-      Boolean(process.env.CLOUDINARY_API_SECRET))
+    Boolean(clean(process.env.CLOUDINARY_URL)) ||
+    (Boolean(clean(process.env.CLOUDINARY_CLOUD_NAME)) &&
+      Boolean(clean(process.env.CLOUDINARY_API_KEY)) &&
+      Boolean(clean(process.env.CLOUDINARY_API_SECRET)))
   );
 }
 
 function ensureCloudinaryConfig() {
-  if (process.env.CLOUDINARY_URL) return;
-  if (!hasCloudinaryConfig()) return;
+  const cloudinaryUrl = clean(process.env.CLOUDINARY_URL);
+
+  if (cloudinaryUrl) {
+    process.env.CLOUDINARY_URL = cloudinaryUrl;
+    cloudinary.config({ secure: true });
+    return;
+  }
 
   cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET,
+    cloud_name: clean(process.env.CLOUDINARY_CLOUD_NAME),
+    api_key: clean(process.env.CLOUDINARY_API_KEY),
+    api_secret: clean(process.env.CLOUDINARY_API_SECRET),
     secure: true
   });
 }
@@ -25,7 +34,7 @@ function uploadBuffer(file) {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
-        folder: process.env.CLOUDINARY_FOLDER || "tala-mboka/reports",
+        folder: clean(process.env.CLOUDINARY_FOLDER) || "tala-mboka/reports",
         resource_type: "image",
         transformation: [
           { width: 1600, height: 1200, crop: "limit" },
