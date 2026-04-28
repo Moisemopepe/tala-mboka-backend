@@ -16,6 +16,37 @@ function imageUrls(req) {
   return files.map((file) => `${req.protocol}://${req.get("host")}/uploads/${file.filename}`);
 }
 
+async function createReportFromRequest(req, userId = null) {
+  const { title, description, category, lat, lng, province = "", commune = "", address = "" } = req.body;
+  const images = imageUrls(req);
+
+  if (!title || !description || !category || !lat || !lng) {
+    const error = new Error("All report fields are required");
+    error.status = 400;
+    throw error;
+  }
+
+  if (!allowedCategories.includes(category)) {
+    const error = new Error("Invalid category");
+    error.status = 400;
+    throw error;
+  }
+
+  return Report.create({
+    ...(userId ? { userId, source: "user" } : { source: "guest" }),
+    title,
+    description,
+    category,
+    imageUrl: images[0] || "",
+    imageUrls: images,
+    province,
+    commune,
+    address,
+    status: "suivi",
+    location: { lat: Number(lat), lng: Number(lng) }
+  });
+}
+
 router.get("/", async (req, res, next) => {
   try {
     const { sort = "newest", category, status, nearLat, nearLng } = req.query;
@@ -89,36 +120,28 @@ router.post(
   ]),
   async (req, res, next) => {
   try {
-    const { title, description, category, lat, lng, province = "", commune = "", address = "" } = req.body;
-    const images = imageUrls(req);
-
-    if (!title || !description || !category || !lat || !lng) {
-      return res.status(400).json({ message: "All report fields are required" });
-    }
-
-    if (!allowedCategories.includes(category)) {
-      return res.status(400).json({ message: "Invalid category" });
-    }
-
-    const report = await Report.create({
-      userId: req.user._id,
-      title,
-      description,
-      category,
-      imageUrl: images[0] || "",
-      imageUrls: images,
-      province,
-      commune,
-      address,
-      status: "suivi",
-      location: { lat: Number(lat), lng: Number(lng) }
-    });
-
+    const report = await createReportFromRequest(req, req.user._id);
     res.status(201).json(report);
   } catch (error) {
     next(error);
   }
 });
+
+router.post(
+  "/guest",
+  upload.fields([
+    { name: "images", maxCount: 3 },
+    { name: "image", maxCount: 1 }
+  ]),
+  async (req, res, next) => {
+    try {
+      const report = await createReportFromRequest(req);
+      res.status(201).json({ report, message: "Signalement envoye avec succes." });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 router.post("/:id/like", requireAuth, async (req, res, next) => {
   try {
