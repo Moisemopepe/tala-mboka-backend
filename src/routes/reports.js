@@ -8,6 +8,7 @@ const router = express.Router();
 
 const allowedCategories = ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping"];
 const allowedStatuses = ["danger", "critique", "suivi", "resolved"];
+const allowedReporterRoles = ["concerned", "witness", "anonymous"];
 
 function uploadedFiles(req) {
   const files = [
@@ -18,7 +19,17 @@ function uploadedFiles(req) {
 }
 
 async function createReportFromRequest(req, userId = null) {
-  const { title, description, category, lat, lng, province = "", commune = "", address = "" } = req.body;
+  const {
+    title,
+    description,
+    category,
+    lat,
+    lng,
+    province = "",
+    commune = "",
+    address = "",
+    reporterRole = "concerned"
+  } = req.body;
   const images = await uploadReportImages(uploadedFiles(req));
 
   if (!title || !description || !category || !lat || !lng) {
@@ -33,8 +44,15 @@ async function createReportFromRequest(req, userId = null) {
     throw error;
   }
 
+  if (!allowedReporterRoles.includes(reporterRole)) {
+    const error = new Error("Invalid reporter role");
+    error.status = 400;
+    throw error;
+  }
+
   return Report.create({
     ...(userId ? { userId, source: "user" } : { source: "guest" }),
+    reporterRole,
     title,
     description,
     category,

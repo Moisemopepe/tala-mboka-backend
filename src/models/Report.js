@@ -4,6 +4,11 @@ const reportSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     source: { type: String, enum: ["user", "guest"], default: "user" },
+    reporterRole: {
+      type: String,
+      enum: ["concerned", "witness", "anonymous"],
+      default: "concerned"
+    },
     title: { type: String, required: true, trim: true, maxlength: 120 },
     description: { type: String, required: true, trim: true, maxlength: 1200 },
     category: {

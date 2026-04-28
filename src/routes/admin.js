@@ -10,6 +10,7 @@ const router = express.Router();
 const statuses = ["danger", "critique", "suivi", "resolved"];
 const moderationStatuses = ["pending", "approved", "rejected"];
 const categories = ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping"];
+const reporterRoles = ["concerned", "witness", "anonymous"];
 
 function signToken(user) {
   return jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
@@ -215,7 +216,7 @@ router.patch("/reports/:id/status", async (req, res, next) => {
 
 router.patch("/reports/:id", async (req, res, next) => {
   try {
-    const { title, description, category, status, lat, lng } = req.body;
+    const { title, description, category, status, reporterRole, lat, lng } = req.body;
     const update = {};
 
     if (title !== undefined) update.title = String(title).trim();
@@ -231,6 +232,12 @@ router.patch("/reports/:id", async (req, res, next) => {
         return res.status(400).json({ message: "Invalid status" });
       }
       update.status = status;
+    }
+    if (reporterRole !== undefined) {
+      if (!reporterRoles.includes(reporterRole)) {
+        return res.status(400).json({ message: "Invalid reporter role" });
+      }
+      update.reporterRole = reporterRole;
     }
     if (lat !== undefined || lng !== undefined) {
       const nextLat = Number(lat);
