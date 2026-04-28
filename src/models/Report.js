@@ -7,10 +7,14 @@ const reportSchema = new mongoose.Schema(
     description: { type: String, required: true, trim: true, maxlength: 1200 },
     category: {
       type: String,
-      enum: ["road", "water", "electricity", "waste", "security"],
+      enum: ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping"],
       required: true
     },
     imageUrl: { type: String, default: "" },
+    imageUrls: [{ type: String }],
+    province: { type: String, trim: true, default: "" },
+    commune: { type: String, trim: true, default: "" },
+    address: { type: String, trim: true, default: "" },
     location: {
       lat: { type: Number, required: true, min: -90, max: 90 },
       lng: { type: Number, required: true, min: -180, max: 180 }

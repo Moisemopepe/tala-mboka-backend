@@ -5,12 +5,15 @@ import { upload } from "../middleware/upload.js";
 
 const router = express.Router();
 
-const allowedCategories = ["road", "water", "electricity", "waste", "security"];
+const allowedCategories = ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping"];
 const allowedStatuses = ["danger", "critique", "suivi", "resolved"];
 
-function imageUrl(req) {
-  if (!req.file) return "";
-  return `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
+function imageUrls(req) {
+  const files = [
+    ...(req.files?.images || []),
+    ...(req.files?.image || [])
+  ];
+  return files.map((file) => `${req.protocol}://${req.get("host")}/uploads/${file.filename}`);
 }
 
 router.get("/", async (req, res, next) => {
@@ -77,9 +80,17 @@ router.get("/:id", async (req, res, next) => {
   }
 });
 
-router.post("/", requireAuth, upload.single("image"), async (req, res, next) => {
+router.post(
+  "/",
+  requireAuth,
+  upload.fields([
+    { name: "images", maxCount: 3 },
+    { name: "image", maxCount: 1 }
+  ]),
+  async (req, res, next) => {
   try {
-    const { title, description, category, lat, lng } = req.body;
+    const { title, description, category, lat, lng, province = "", commune = "", address = "" } = req.body;
+    const images = imageUrls(req);
 
     if (!title || !description || !category || !lat || !lng) {
       return res.status(400).json({ message: "All report fields are required" });
@@ -94,7 +105,11 @@ router.post("/", requireAuth, upload.single("image"), async (req, res, next) => 
       title,
       description,
       category,
-      imageUrl: imageUrl(req),
+      imageUrl: images[0] || "",
+      imageUrls: images,
+      province,
+      commune,
+      address,
       status: "suivi",
       location: { lat: Number(lat), lng: Number(lng) }
     });
