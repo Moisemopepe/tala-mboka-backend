@@ -8,7 +8,8 @@ import User from "../models/User.js";
 
 const router = express.Router();
 const statuses = ["danger", "critique", "suivi", "resolved"];
-const categories = ["road", "water", "electricity", "waste", "security"];
+const moderationStatuses = ["pending", "approved", "rejected"];
+const categories = ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping"];
 
 function signToken(user) {
   return jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
@@ -83,15 +84,32 @@ router.post("/version-notifications", async (req, res, next) => {
 
 router.get("/stats", async (_req, res, next) => {
   try {
-    const [totalReports, totalUsers, dangerReports, critiqueReports, suiviReports, resolvedReports, categoryRows, statusRows] = await Promise.all([
+    const [
+      totalReports,
+      totalUsers,
+      dangerReports,
+      critiqueReports,
+      suiviReports,
+      resolvedReports,
+      pendingModerationReports,
+      approvedModerationReports,
+      rejectedModerationReports,
+      categoryRows,
+      statusRows,
+      moderationRows
+    ] = await Promise.all([
       Report.countDocuments(),
       User.countDocuments(),
       Report.countDocuments({ status: "danger" }),
       Report.countDocuments({ status: "critique" }),
       Report.countDocuments({ status: { $in: ["suivi", "pending", "in_progress", "approved"] } }),
       Report.countDocuments({ status: "resolved" }),
+      Report.countDocuments({ moderationStatus: "pending" }),
+      Report.countDocuments({ $or: [{ moderationStatus: "approved" }, { moderationStatus: { $exists: false } }] }),
+      Report.countDocuments({ moderationStatus: "rejected" }),
       Report.aggregate([{ $group: { _id: "$category", count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
-      Report.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }])
+      Report.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
+      Report.aggregate([{ $group: { _id: "$moderationStatus", count: { $sum: 1 } } }])
     ]);
 
     res.json({
@@ -102,22 +120,71 @@ router.get("/stats", async (_req, res, next) => {
       suiviReports,
       resolvedReports,
       pendingReports: suiviReports,
+      pendingModerationReports,
+      approvedModerationReports,
+      rejectedModerationReports,
       categoryBreakdown: categoryRows.map((row) => ({ category: row._id, count: row.count })),
-      statusBreakdown: statusRows.map((row) => ({ status: row._id, count: row.count }))
+      statusBreakdown: statusRows.map((row) => ({ status: row._id, count: row.count })),
+      moderationBreakdown: moderationRows.map((row) => ({ status: row._id || "approved", count: row.count }))
     });
   } catch (error) {
     next(error);
   }
 });
 
-router.get("/reports", async (_req, res, next) => {
+router.get("/reports", async (req, res, next) => {
   try {
-    const reports = await Report.find()
+    const filter = {};
+    if (req.query.status && moderationStatuses.includes(req.query.status)) {
+      filter.moderationStatus =
+        req.query.status === "approved"
+          ? { $in: ["approved", null] }
+          : req.query.status;
+    }
+
+    const reports = await Report.find(filter)
       .sort({ createdAt: -1 })
       .populate("userId", "name phone role banned")
       .lean({ virtuals: true });
 
     res.json(reports.map((report) => ({ ...report, likesCount: report.likes?.length || 0 })));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/reports/:id/approve", async (req, res, next) => {
+  try {
+    const report = await Report.findByIdAndUpdate(
+      req.params.id,
+      { moderationStatus: "approved", rejectionReason: "" },
+      { new: true, runValidators: true }
+    ).populate("userId", "name phone role banned");
+
+    if (!report) {
+      return res.status(404).json({ message: "Report not found" });
+    }
+
+    res.json({ ...report.toJSON(), likesCount: report.likes.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/reports/:id/reject", async (req, res, next) => {
+  try {
+    const reason = String(req.body.reason || "").trim();
+    const report = await Report.findByIdAndUpdate(
+      req.params.id,
+      { moderationStatus: "rejected", rejectionReason: reason },
+      { new: true, runValidators: true }
+    ).populate("userId", "name phone role banned");
+
+    if (!report) {
+      return res.status(404).json({ message: "Report not found" });
+    }
+
+    res.json({ ...report.toJSON(), likesCount: report.likes.length });
   } catch (error) {
     next(error);
   }

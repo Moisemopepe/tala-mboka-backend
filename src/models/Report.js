@@ -25,6 +25,16 @@ const reportSchema = new mongoose.Schema(
       type: String,
       enum: ["danger", "critique", "suivi", "resolved"],
       default: "suivi"
+    },
+    moderationStatus: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "approved"
+    },
+    rejectionReason: {
+      type: String,
+      trim: true,
+      default: ""
     }
   },
   { timestamps: true }

@@ -43,6 +43,7 @@ async function createReportFromRequest(req, userId = null) {
     commune,
     address,
     status: "suivi",
+    moderationStatus: userId ? "approved" : "pending",
     location: { lat: Number(lat), lng: Number(lng) }
   });
 }
@@ -50,7 +51,9 @@ async function createReportFromRequest(req, userId = null) {
 router.get("/", async (req, res, next) => {
   try {
     const { sort = "newest", category, status, nearLat, nearLng } = req.query;
-    const filter = {};
+    const filter = {
+      $or: [{ moderationStatus: "approved" }, { moderationStatus: { $exists: false } }]
+    };
 
     if (category && allowedCategories.includes(category)) {
       filter.category = category;
@@ -103,6 +106,9 @@ router.get("/:id", async (req, res, next) => {
   try {
     const report = await Report.findById(req.params.id).populate("userId", "name phone");
     if (!report) {
+      return res.status(404).json({ message: "Report not found" });
+    }
+    if (report.moderationStatus && report.moderationStatus !== "approved") {
       return res.status(404).json({ message: "Report not found" });
     }
     res.json(report);
