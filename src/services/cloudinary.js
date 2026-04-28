@@ -33,7 +33,12 @@ function uploadBuffer(file) {
         ]
       },
       (error, result) => {
-        if (error) return reject(error);
+        if (error) {
+          console.error("Cloudinary upload failed:", error.message);
+          const uploadError = new Error("Impossible d'envoyer l'image pour le moment. Verifiez la configuration Cloudinary.");
+          uploadError.status = 502;
+          return reject(uploadError);
+        }
         resolve(result.secure_url);
       }
     );
@@ -46,7 +51,7 @@ export async function uploadReportImages(files = []) {
   if (!files.length) return [];
 
   if (!hasCloudinaryConfig()) {
-    const error = new Error("Image storage is not configured");
+    const error = new Error("Le stockage image n'est pas configure.");
     error.status = 500;
     throw error;
   }
