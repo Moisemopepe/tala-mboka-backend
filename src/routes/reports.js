@@ -6,7 +6,7 @@ import { uploadReportImages } from "../services/cloudinary.js";
 
 const router = express.Router();
 
-const allowedCategories = ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping"];
+const allowedCategories = ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping", "other"];
 const allowedStatuses = ["danger", "critique", "suivi", "resolved"];
 const allowedReporterRoles = ["concerned", "witness", "anonymous"];
 

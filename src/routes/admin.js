@@ -9,7 +9,7 @@ import User from "../models/User.js";
 const router = express.Router();
 const statuses = ["danger", "critique", "suivi", "resolved"];
 const moderationStatuses = ["pending", "approved", "rejected"];
-const categories = ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping"];
+const categories = ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping", "other"];
 const reporterRoles = ["concerned", "witness", "anonymous"];
 
 function signToken(user) {

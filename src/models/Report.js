@@ -13,7 +13,7 @@ const reportSchema = new mongoose.Schema(
     description: { type: String, required: true, trim: true, maxlength: 1200 },
     category: {
       type: String,
-      enum: ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping"],
+      enum: ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping", "other"],
       required: true
     },
     imageUrl: { type: String, default: "" },
