@@ -2,23 +2,24 @@ import express from "express";
 import Report from "../models/Report.js";
 import { requireAuth } from "../middleware/auth.js";
 import { upload } from "../middleware/upload.js";
+import { uploadReportImages } from "../services/cloudinary.js";
 
 const router = express.Router();
 
 const allowedCategories = ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping"];
 const allowedStatuses = ["danger", "critique", "suivi", "resolved"];
 
-function imageUrls(req) {
+function uploadedFiles(req) {
   const files = [
     ...(req.files?.images || []),
     ...(req.files?.image || [])
   ];
-  return files.map((file) => `${req.protocol}://${req.get("host")}/uploads/${file.filename}`);
+  return files;
 }
 
 async function createReportFromRequest(req, userId = null) {
   const { title, description, category, lat, lng, province = "", commune = "", address = "" } = req.body;
-  const images = imageUrls(req);
+  const images = await uploadReportImages(uploadedFiles(req));
 
   if (!title || !description || !category || !lat || !lng) {
     const error = new Error("All report fields are required");
