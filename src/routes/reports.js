@@ -6,6 +6,7 @@ import { upload } from "../middleware/upload.js";
 const router = express.Router();
 
 const allowedCategories = ["road", "water", "electricity", "waste", "security"];
+const allowedStatuses = ["danger", "critique", "suivi", "resolved"];
 
 function imageUrl(req) {
   if (!req.file) return "";
@@ -14,11 +15,19 @@ function imageUrl(req) {
 
 router.get("/", async (req, res, next) => {
   try {
-    const { sort = "newest", category, nearLat, nearLng } = req.query;
+    const { sort = "newest", category, status, nearLat, nearLng } = req.query;
     const filter = {};
 
     if (category && allowedCategories.includes(category)) {
       filter.category = category;
+    }
+    if (status && allowedStatuses.includes(status)) {
+      filter.status =
+        status === "suivi"
+          ? { $in: ["suivi", "pending", "in_progress", "approved"] }
+          : status === "resolved"
+            ? { $in: ["resolved", "rejected"] }
+            : status;
     }
 
     const reports = await Report.find(filter).populate("userId", "name phone").lean({ virtuals: true });
@@ -86,6 +95,7 @@ router.post("/", requireAuth, upload.single("image"), async (req, res, next) => 
       description,
       category,
       imageUrl: imageUrl(req),
+      status: "suivi",
       location: { lat: Number(lat), lng: Number(lng) }
     });
 

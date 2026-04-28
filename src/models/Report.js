@@ -18,8 +18,8 @@ const reportSchema = new mongoose.Schema(
     likes: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     status: {
       type: String,
-      enum: ["pending", "in_progress", "resolved"],
-      default: "pending"
+      enum: ["danger", "critique", "suivi", "resolved"],
+      default: "suivi"
     }
   },
   { timestamps: true }

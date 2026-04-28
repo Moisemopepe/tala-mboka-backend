@@ -7,7 +7,7 @@ import Report from "../models/Report.js";
 import User from "../models/User.js";
 
 const router = express.Router();
-const statuses = ["pending", "in_progress", "resolved"];
+const statuses = ["danger", "critique", "suivi", "resolved"];
 const categories = ["road", "water", "electricity", "waste", "security"];
 
 function signToken(user) {
@@ -83,10 +83,12 @@ router.post("/version-notifications", async (req, res, next) => {
 
 router.get("/stats", async (_req, res, next) => {
   try {
-    const [totalReports, totalUsers, pendingReports, resolvedReports, categoryRows, statusRows] = await Promise.all([
+    const [totalReports, totalUsers, dangerReports, critiqueReports, suiviReports, resolvedReports, categoryRows, statusRows] = await Promise.all([
       Report.countDocuments(),
       User.countDocuments(),
-      Report.countDocuments({ status: "pending" }),
+      Report.countDocuments({ status: "danger" }),
+      Report.countDocuments({ status: "critique" }),
+      Report.countDocuments({ status: { $in: ["suivi", "pending", "in_progress", "approved"] } }),
       Report.countDocuments({ status: "resolved" }),
       Report.aggregate([{ $group: { _id: "$category", count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
       Report.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }])
@@ -95,8 +97,11 @@ router.get("/stats", async (_req, res, next) => {
     res.json({
       totalReports,
       totalUsers,
-      pendingReports,
+      dangerReports,
+      critiqueReports,
+      suiviReports,
       resolvedReports,
+      pendingReports: suiviReports,
       categoryBreakdown: categoryRows.map((row) => ({ category: row._id, count: row.count })),
       statusBreakdown: statusRows.map((row) => ({ status: row._id, count: row.count }))
     });
