@@ -11,6 +11,7 @@ import adminRoutes from "./routes/admin.js";
 import notificationRoutes from "./routes/notifications.js";
 import reportRoutes from "./routes/reports.js";
 import { ensureConfiguredAdmin } from "./services/adminBootstrap.js";
+import { sendAutomaticVersionNotifications } from "./services/versionNotifications.js";
 
 dotenv.config();
 
@@ -44,6 +45,7 @@ mongoose
   .connect(process.env.MONGODB_URI)
   .then(async () => {
     await ensureConfiguredAdmin();
+    await sendAutomaticVersionNotifications(process.env.APP_VERSION);
     app.listen(port, () => {
       console.log(`Tala Mboka API running on port ${port}`);
     });

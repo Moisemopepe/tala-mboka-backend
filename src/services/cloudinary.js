@@ -1,31 +1,29 @@
 import { v2 as cloudinary } from "cloudinary";
+import fs from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
 
-function clean(value = "") {
-  return String(value).trim();
-}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const localUploadDir = path.join(__dirname, "..", "uploads");
 
 function hasCloudinaryConfig() {
   return (
-    Boolean(clean(process.env.CLOUDINARY_URL)) ||
-    (Boolean(clean(process.env.CLOUDINARY_CLOUD_NAME)) &&
-      Boolean(clean(process.env.CLOUDINARY_API_KEY)) &&
-      Boolean(clean(process.env.CLOUDINARY_API_SECRET)))
+    Boolean(process.env.CLOUDINARY_URL) ||
+    (Boolean(process.env.CLOUDINARY_CLOUD_NAME) &&
+      Boolean(process.env.CLOUDINARY_API_KEY) &&
+      Boolean(process.env.CLOUDINARY_API_SECRET))
   );
 }
 
 function ensureCloudinaryConfig() {
-  const cloudinaryUrl = clean(process.env.CLOUDINARY_URL);
-
-  if (cloudinaryUrl) {
-    process.env.CLOUDINARY_URL = cloudinaryUrl;
-    cloudinary.config({ secure: true });
-    return;
-  }
+  if (process.env.CLOUDINARY_URL) return;
+  if (!hasCloudinaryConfig()) return;
 
   cloudinary.config({
-    cloud_name: clean(process.env.CLOUDINARY_CLOUD_NAME),
-    api_key: clean(process.env.CLOUDINARY_API_KEY),
-    api_secret: clean(process.env.CLOUDINARY_API_SECRET),
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
     secure: true
   });
 }
@@ -34,7 +32,7 @@ function uploadBuffer(file) {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       {
-        folder: clean(process.env.CLOUDINARY_FOLDER) || "tala-mboka/reports",
+        folder: process.env.CLOUDINARY_FOLDER || "tala-mboka/reports",
         resource_type: "image",
         transformation: [
           { width: 1600, height: 1200, crop: "limit" },
@@ -42,12 +40,7 @@ function uploadBuffer(file) {
         ]
       },
       (error, result) => {
-        if (error) {
-          console.error("Cloudinary upload failed:", error.message);
-          const uploadError = new Error("Impossible d'envoyer l'image pour le moment. Verifiez la configuration Cloudinary.");
-          uploadError.status = 502;
-          return reject(uploadError);
-        }
+        if (error) return reject(error);
         resolve(result.secure_url);
       }
     );
@@ -60,11 +53,23 @@ export async function uploadReportImages(files = []) {
   if (!files.length) return [];
 
   if (!hasCloudinaryConfig()) {
-    const error = new Error("Le stockage image n'est pas configure.");
-    error.status = 500;
-    throw error;
+    await fs.mkdir(localUploadDir, { recursive: true });
+    return Promise.all(files.map(saveLocalImage));
   }
 
   ensureCloudinaryConfig();
   return Promise.all(files.map((file) => uploadBuffer(file)));
+}
+
+async function saveLocalImage(file) {
+  const extension = path.extname(file.originalname || "") || extensionFromMime(file.mimetype);
+  const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`;
+  await fs.writeFile(path.join(localUploadDir, filename), file.buffer);
+  return `/uploads/${filename}`;
+}
+
+function extensionFromMime(mimetype = "") {
+  if (mimetype.includes("png")) return ".png";
+  if (mimetype.includes("webp")) return ".webp";
+  return ".jpg";
 }

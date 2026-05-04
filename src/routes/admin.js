@@ -1,19 +1,112 @@
-import bcrypt from "bcryptjs";
 import express from "express";
+import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { requireAdmin, requireAuth } from "../middleware/auth.js";
-import Notification from "../models/Notification.js";
+import { requireAdmin, requireAuth, requireRole } from "../middleware/auth.js";
 import Report from "../models/Report.js";
 import User from "../models/User.js";
+import { notifyRoles, notifyUser } from "../services/notifications.js";
 
 const router = express.Router();
-const statuses = ["danger", "critique", "suivi", "resolved"];
-const moderationStatuses = ["pending", "approved", "rejected"];
-const categories = ["road", "water", "electricity", "waste", "security", "fraud", "kidnapping", "other"];
-const reporterRoles = ["concerned", "witness", "anonymous"];
+const statuses = ["pending", "verified", "rejected"];
+const categories = [
+  "residential",
+  "commercial",
+  "government",
+  "utility",
+  "transport",
+  "communication",
+  "health",
+  "education",
+  "community",
+  "public_space",
+  "other",
+  "road",
+  "water",
+  "electricity",
+  "waste",
+  "security",
+  "fraud",
+  "kidnapping"
+];
+const infrastructureTypes = ["residential", "commercial", "government", "utility", "transport", "communication", "health", "education", "community", "public_space", "other"];
+const crisisTypes = ["earthquake", "flood", "fire", "explosion", "chemical_incident", "conflict", "tsunami", "hurricane", "wildfire", "civil_unrest", "other"];
+const damageLevels = ["minimal", "partial", "complete"];
+const debrisOptions = ["unknown", "no", "yes"];
+const languages = ["ar", "zh", "en", "fr", "ru", "es"];
+
+function parseBoolean(value) {
+  return value === true || value === "true" || value === "1" || value === 1;
+}
 
 function signToken(user) {
   return jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
+}
+
+function adminReport(report) {
+  const plain = typeof report.toJSON === "function" ? report.toJSON() : report;
+  return {
+    ...plain,
+    moderationStatus: plain.status,
+    status: plain.status,
+    likesCount: plain.likes?.length || 0
+  };
+}
+
+function firstAllowed(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+
+function normalizeImportedReport(item) {
+  const lat = Number(item.lat ?? item.location?.lat ?? item.location?.coordinates?.[1]);
+  const lng = Number(item.lng ?? item.location?.lng ?? item.location?.coordinates?.[0]);
+
+  if (!String(item.description || "").trim() || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+
+  const infrastructureType = firstAllowed(item.infrastructureType || item.category, infrastructureTypes, "other");
+  const category = firstAllowed(item.category || infrastructureType, categories, infrastructureType);
+  const locationDescription = String(item.locationDescription || item.addressText || item.location?.address || "").trim();
+
+  return {
+    title: String(item.title || "Crisis damage report").trim().slice(0, 120),
+    description: String(item.description).trim().slice(0, 1200),
+    category,
+    infrastructureType,
+    infrastructureName: String(item.infrastructureName || "").trim().slice(0, 180),
+    assetId: String(item.assetId || item._id || `import-${lat}-${lng}-${Date.now()}`).trim().slice(0, 180),
+    language: firstAllowed(item.language || "en", languages, "en"),
+    crisisType: firstAllowed(item.crisisType || "other", crisisTypes, "other"),
+    damageLevel: firstAllowed(item.damageLevel || "partial", damageLevels, "partial"),
+    debris: firstAllowed(item.debris || "unknown", debrisOptions, "unknown"),
+    locationDescription,
+    addressText: String(item.addressText || locationDescription).trim().slice(0, 300),
+    needs: Array.isArray(item.needs) ? item.needs.map((need) => String(need).trim().slice(0, 80)).filter(Boolean).slice(0, 8) : [],
+    modularAnswers: {
+      accessBlocked: parseBoolean(item.modularAnswers?.accessBlocked ?? item.accessBlocked),
+      servicesDisrupted: parseBoolean(item.modularAnswers?.servicesDisrupted ?? item.servicesDisrupted),
+      livelihoodsAffected: parseBoolean(item.modularAnswers?.livelihoodsAffected ?? item.livelihoodsAffected),
+      peopleAtRisk: parseBoolean(item.modularAnswers?.peopleAtRisk ?? item.peopleAtRisk)
+    },
+    province: String(item.province || "").trim(),
+    commune: String(item.commune || "").trim(),
+    imageUrl: String(item.imageUrl || item.imageUrls?.[0] || "").trim(),
+    imageUrls: Array.isArray(item.imageUrls) ? item.imageUrls.map((url) => String(url).trim()).filter(Boolean).slice(0, 3) : [],
+    location: {
+      type: "Point",
+      coordinates: [lng, lat],
+      lat,
+      lng,
+      address: String(item.address || item.addressText || locationDescription).trim()
+    },
+    source: firstAllowed(item.source || "guest", ["guest", "user"], "guest"),
+    status: firstAllowed(item.status || "pending", statuses, "pending"),
+    risk: firstAllowed(item.risk || "suivi", ["suivi", "critique", "danger", "resolved"], "suivi"),
+    rejectionReason: String(item.rejectionReason || "").trim(),
+    version: Number.isFinite(Number(item.version)) ? Number(item.version) : 1,
+    createdAt: item.createdAt ? new Date(item.createdAt) : undefined,
+    updatedAt: item.updatedAt ? new Date(item.updatedAt) : undefined
+  };
 }
 
 router.post("/login", async (req, res, next) => {
@@ -33,8 +126,8 @@ router.post("/login", async (req, res, next) => {
       return res.status(403).json({ message: "Account banned" });
     }
 
-    if (user.role !== "admin") {
-      return res.status(403).json({ message: "Admin access required" });
+    if (!["admin", "moderator"].includes(user.role)) {
+      return res.status(403).json({ message: "Admin or moderator access required" });
     }
 
     const isValid = await bcrypt.compare(password, user.password);
@@ -48,36 +141,38 @@ router.post("/login", async (req, res, next) => {
   }
 });
 
-router.use(requireAuth, requireAdmin);
+router.use(requireAuth, requireRole("admin", "moderator"));
 
-router.post("/version-notifications", async (req, res, next) => {
+router.post("/version-notifications", requireAdmin, async (req, res, next) => {
   try {
-    const version = String(req.body.version || "").trim();
-    const adminNotes = String(req.body.adminNotes || "").trim();
-    const userNotes = String(req.body.userNotes || "").trim();
+    const { version, adminNotes, userNotes } = req.body;
+    const trimmedVersion = String(version || "").trim();
+    const trimmedAdminNotes = String(adminNotes || "").trim();
+    const trimmedUserNotes = String(userNotes || "").trim();
 
-    if (!version || !adminNotes || !userNotes) {
+    if (!trimmedVersion || !trimmedAdminNotes || !trimmedUserNotes) {
       return res.status(400).json({ message: "Version, admin notes and user notes are required" });
     }
 
-    if (adminNotes.length > 2000 || userNotes.length > 2000) {
+    if (trimmedAdminNotes.length > 2000 || trimmedUserNotes.length > 2000) {
       return res.status(400).json({ message: "Version notes cannot exceed 2000 characters" });
     }
 
-    await Notification.create([
-      {
-        roles: ["admin"],
-        title: `Nouvelle version ${version}`,
-        message: adminNotes
-      },
-      {
-        roles: ["user"],
-        title: `Tala Mboka ${version}`,
-        message: userNotes
-      }
-    ]);
+    await notifyRoles({
+      roles: ["admin", "moderator"],
+      type: "version_release",
+      title: `Nouvelle version ${trimmedVersion}`,
+      message: trimmedAdminNotes
+    });
 
-    res.status(201).json({ message: "Notifications de version envoyees." });
+    await notifyRoles({
+      roles: ["user"],
+      type: "version_release",
+      title: `Tala Mboka ${trimmedVersion}`,
+      message: trimmedUserNotes
+    });
+
+    res.status(201).json({ message: "Version notifications sent" });
   } catch (error) {
     next(error);
   }
@@ -85,48 +180,33 @@ router.post("/version-notifications", async (req, res, next) => {
 
 router.get("/stats", async (_req, res, next) => {
   try {
-    const [
-      totalReports,
-      totalUsers,
-      dangerReports,
-      critiqueReports,
-      suiviReports,
-      resolvedReports,
-      pendingModerationReports,
-      approvedModerationReports,
-      rejectedModerationReports,
-      categoryRows,
-      statusRows,
-      moderationRows
-    ] = await Promise.all([
+    const [totalReports, totalUsers, pendingReports, verifiedReports, rejectedReports, damageRows, crisisRows, infrastructureRows, statusRows] = await Promise.all([
       Report.countDocuments(),
       User.countDocuments(),
-      Report.countDocuments({ status: "danger" }),
-      Report.countDocuments({ status: "critique" }),
-      Report.countDocuments({ status: { $in: ["suivi", "pending", "in_progress", "approved"] } }),
-      Report.countDocuments({ status: "resolved" }),
-      Report.countDocuments({ moderationStatus: "pending" }),
-      Report.countDocuments({ $or: [{ moderationStatus: "approved" }, { moderationStatus: { $exists: false } }] }),
-      Report.countDocuments({ moderationStatus: "rejected" }),
-      Report.aggregate([{ $group: { _id: "$category", count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
-      Report.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
-      Report.aggregate([{ $group: { _id: "$moderationStatus", count: { $sum: 1 } } }])
+      Report.countDocuments({ status: "pending" }),
+      Report.countDocuments({ status: "verified" }),
+      Report.countDocuments({ status: "rejected" }),
+      Report.aggregate([{ $group: { _id: "$damageLevel", count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
+      Report.aggregate([{ $group: { _id: "$crisisType", count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
+      Report.aggregate([{ $group: { _id: "$infrastructureType", count: { $sum: 1 } } }, { $sort: { count: -1 } }]),
+      Report.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }])
     ]);
 
     res.json({
+      users: totalUsers,
+      reports: totalReports,
+      pending: pendingReports,
+      verified: verifiedReports,
+      rejected: rejectedReports,
       totalReports,
       totalUsers,
-      dangerReports,
-      critiqueReports,
-      suiviReports,
-      resolvedReports,
-      pendingReports: suiviReports,
-      pendingModerationReports,
-      approvedModerationReports,
-      rejectedModerationReports,
-      categoryBreakdown: categoryRows.map((row) => ({ category: row._id, count: row.count })),
-      statusBreakdown: statusRows.map((row) => ({ status: row._id, count: row.count })),
-      moderationBreakdown: moderationRows.map((row) => ({ status: row._id || "approved", count: row.count }))
+      pendingReports,
+      verifiedReports,
+      pendingModerationReports: pendingReports,
+      damageBreakdown: damageRows.map((row) => ({ damageLevel: row._id || "partial", count: row.count })),
+      crisisBreakdown: crisisRows.map((row) => ({ crisisType: row._id || "other", count: row.count })),
+      infrastructureBreakdown: infrastructureRows.map((row) => ({ infrastructureType: row._id || "other", count: row.count })),
+      statusBreakdown: statusRows.map((row) => ({ status: row._id || "pending", count: row.count }))
     });
   } catch (error) {
     next(error);
@@ -136,19 +216,51 @@ router.get("/stats", async (_req, res, next) => {
 router.get("/reports", async (req, res, next) => {
   try {
     const filter = {};
-    if (req.query.status && moderationStatuses.includes(req.query.status)) {
-      filter.moderationStatus =
-        req.query.status === "approved"
-          ? { $in: ["approved", null] }
-          : req.query.status;
-    }
+    if (req.query.status && statuses.includes(req.query.status)) filter.status = req.query.status;
 
     const reports = await Report.find(filter)
       .sort({ createdAt: -1 })
       .populate("userId", "name phone role banned")
       .lean({ virtuals: true });
 
-    res.json(reports.map((report) => ({ ...report, likesCount: report.likes?.length || 0 })));
+    res.json(reports.map(adminReport));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/reports/import", requireAdmin, async (req, res, next) => {
+  try {
+    const reports = Array.isArray(req.body?.reports) ? req.body.reports : [];
+
+    if (!reports.length || reports.length > 250) {
+      return res.status(400).json({ message: "Provide between 1 and 250 reports" });
+    }
+
+    let imported = 0;
+    const skipped = [];
+
+    for (const item of reports) {
+      const normalized = normalizeImportedReport(item);
+
+      if (!normalized) {
+        skipped.push({ assetId: item?.assetId || item?._id || "", reason: "invalid report data" });
+        continue;
+      }
+
+      const existing = normalized.assetId ? await Report.findOne({ assetId: normalized.assetId }) : null;
+
+      if (existing) {
+        Object.assign(existing, normalized);
+        await existing.save();
+      } else {
+        await Report.create(normalized);
+      }
+
+      imported += 1;
+    }
+
+    res.status(201).json({ imported, skipped });
   } catch (error) {
     next(error);
   }
@@ -158,15 +270,27 @@ router.patch("/reports/:id/approve", async (req, res, next) => {
   try {
     const report = await Report.findByIdAndUpdate(
       req.params.id,
-      { moderationStatus: "approved", rejectionReason: "" },
-      { new: true, runValidators: true }
+      { status: "verified", rejectionReason: "" },
+      { new: true }
     ).populate("userId", "name phone role banned");
 
-    if (!report) {
-      return res.status(404).json({ message: "Report not found" });
-    }
+    if (!report) return res.status(404).json({ message: "Report not found" });
 
-    res.json({ ...report.toJSON(), likesCount: report.likes.length });
+    await notifyRoles({
+      reportId: report._id,
+      type: "report_approved",
+      title: "Signalement approuve",
+      message: `${report.title} est maintenant visible publiquement.`
+    });
+    await notifyUser({
+      userId: report.userId,
+      reportId: report._id,
+      type: "report_approved",
+      title: "Votre signalement est approuve",
+      message: `${report.title} est maintenant publie.`
+    });
+
+    res.json(adminReport(report));
   } catch (error) {
     next(error);
   }
@@ -174,18 +298,29 @@ router.patch("/reports/:id/approve", async (req, res, next) => {
 
 router.patch("/reports/:id/reject", async (req, res, next) => {
   try {
-    const reason = String(req.body.reason || "").trim();
     const report = await Report.findByIdAndUpdate(
       req.params.id,
-      { moderationStatus: "rejected", rejectionReason: reason },
-      { new: true, runValidators: true }
+      { status: "rejected", rejectionReason: String(req.body.reason || "").trim() },
+      { new: true }
     ).populate("userId", "name phone role banned");
 
-    if (!report) {
-      return res.status(404).json({ message: "Report not found" });
-    }
+    if (!report) return res.status(404).json({ message: "Report not found" });
 
-    res.json({ ...report.toJSON(), likesCount: report.likes.length });
+    await notifyRoles({
+      reportId: report._id,
+      type: "report_rejected",
+      title: "Signalement rejete",
+      message: `${report.title} a ete rejete.`
+    });
+    await notifyUser({
+      userId: report.userId,
+      reportId: report._id,
+      type: "report_rejected",
+      title: "Votre signalement est rejete",
+      message: report.rejectionReason || `${report.title} n'a pas ete publie.`
+    });
+
+    res.json(adminReport(report));
   } catch (error) {
     next(error);
   }
@@ -196,19 +331,34 @@ router.patch("/reports/:id/status", async (req, res, next) => {
     const { status } = req.body;
 
     if (!statuses.includes(status)) {
-      return res.status(400).json({ message: "Invalid status" });
+      return res.status(400).json({ message: "Invalid report status" });
     }
 
-    const report = await Report.findByIdAndUpdate(req.params.id, { status }, { new: true }).populate(
-      "userId",
-      "name phone"
-    );
+    const report = await Report.findByIdAndUpdate(
+      req.params.id,
+      { status, rejectionReason: status === "rejected" ? String(req.body.reason || "").trim() : "" },
+      { new: true, runValidators: true }
+    ).populate("userId", "name phone");
 
     if (!report) {
       return res.status(404).json({ message: "Report not found" });
     }
 
-    res.json(report);
+    await notifyRoles({
+      reportId: report._id,
+      type: "report_updated",
+      title: "Report status updated",
+      message: `${report.title} is now ${report.status}.`
+    });
+    await notifyUser({
+      userId: report.userId,
+      reportId: report._id,
+      type: "report_updated",
+      title: "Your report was updated",
+      message: `${report.title} is now ${report.status}.`
+    });
+
+    res.json(adminReport(report));
   } catch (error) {
     next(error);
   }
@@ -216,28 +366,83 @@ router.patch("/reports/:id/status", async (req, res, next) => {
 
 router.patch("/reports/:id", async (req, res, next) => {
   try {
-    const { title, description, category, status, reporterRole, lat, lng } = req.body;
+    const {
+      title,
+      description,
+      category,
+      infrastructureType,
+      infrastructureName,
+      assetId,
+      language,
+      crisisType,
+      damageLevel,
+      debris,
+      locationDescription,
+      modularAnswers,
+      province,
+      commune,
+      status,
+      lat,
+      lng
+    } = req.body;
     const update = {};
 
     if (title !== undefined) update.title = String(title).trim();
     if (description !== undefined) update.description = String(description).trim();
+    if (province !== undefined) update.province = String(province).trim();
+    if (commune !== undefined) update.commune = String(commune).trim();
     if (category !== undefined) {
       if (!categories.includes(category)) {
         return res.status(400).json({ message: "Invalid category" });
       }
       update.category = category;
     }
+    if (infrastructureType !== undefined) {
+      if (!infrastructureTypes.includes(infrastructureType)) {
+        return res.status(400).json({ message: "Invalid infrastructure type" });
+      }
+      update.infrastructureType = infrastructureType;
+    }
+    if (infrastructureName !== undefined) update.infrastructureName = String(infrastructureName).trim();
+    if (assetId !== undefined) update.assetId = String(assetId).trim();
+    if (language !== undefined) {
+      if (!languages.includes(language)) {
+        return res.status(400).json({ message: "Invalid language" });
+      }
+      update.language = language;
+    }
+    if (crisisType !== undefined) {
+      if (!crisisTypes.includes(crisisType)) {
+        return res.status(400).json({ message: "Invalid crisis type" });
+      }
+      update.crisisType = crisisType;
+    }
+    if (damageLevel !== undefined) {
+      if (!damageLevels.includes(damageLevel)) {
+        return res.status(400).json({ message: "Invalid damage level" });
+      }
+      update.damageLevel = damageLevel;
+    }
+    if (debris !== undefined) {
+      if (!debrisOptions.includes(debris)) {
+        return res.status(400).json({ message: "Invalid debris value" });
+      }
+      update.debris = debris;
+    }
+    if (locationDescription !== undefined) update.locationDescription = String(locationDescription).trim();
+    if (modularAnswers !== undefined && typeof modularAnswers === "object") {
+      update.modularAnswers = {
+        accessBlocked: parseBoolean(modularAnswers.accessBlocked),
+        servicesDisrupted: parseBoolean(modularAnswers.servicesDisrupted),
+        livelihoodsAffected: parseBoolean(modularAnswers.livelihoodsAffected),
+        peopleAtRisk: parseBoolean(modularAnswers.peopleAtRisk)
+      };
+    }
     if (status !== undefined) {
       if (!statuses.includes(status)) {
-        return res.status(400).json({ message: "Invalid status" });
+        return res.status(400).json({ message: "Invalid report status" });
       }
       update.status = status;
-    }
-    if (reporterRole !== undefined) {
-      if (!reporterRoles.includes(reporterRole)) {
-        return res.status(400).json({ message: "Invalid reporter role" });
-      }
-      update.reporterRole = reporterRole;
     }
     if (lat !== undefined || lng !== undefined) {
       const nextLat = Number(lat);
@@ -261,7 +466,7 @@ router.patch("/reports/:id", async (req, res, next) => {
       return res.status(404).json({ message: "Report not found" });
     }
 
-    res.json({ ...report.toJSON(), likesCount: report.likes.length });
+    res.json(adminReport(report));
   } catch (error) {
     next(error);
   }
@@ -281,7 +486,7 @@ router.delete("/reports/:id", async (req, res, next) => {
   }
 });
 
-router.get("/users", async (_req, res, next) => {
+router.get("/users", requireAdmin, async (_req, res, next) => {
   try {
     const users = await User.aggregate([
       {
@@ -311,7 +516,7 @@ router.get("/users", async (_req, res, next) => {
   }
 });
 
-router.patch("/users/:id/ban", async (req, res, next) => {
+router.patch("/users/:id/ban", requireAdmin, async (req, res, next) => {
   try {
     if (req.params.id === req.user._id.toString()) {
       return res.status(400).json({ message: "You cannot ban yourself" });
@@ -331,11 +536,11 @@ router.patch("/users/:id/ban", async (req, res, next) => {
   }
 });
 
-router.patch("/users/:id/role", async (req, res, next) => {
+router.patch("/users/:id/role", requireAdmin, async (req, res, next) => {
   try {
     const { role } = req.body;
 
-    if (!["user", "admin"].includes(role)) {
+    if (!["user", "moderator", "admin"].includes(role)) {
       return res.status(400).json({ message: "Invalid role" });
     }
 

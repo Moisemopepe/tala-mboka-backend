@@ -1,6 +1,6 @@
 import express from "express";
-import { requireAuth } from "../middleware/auth.js";
 import Notification from "../models/Notification.js";
+import { requireAuth } from "../middleware/auth.js";
 
 const router = express.Router();
 
@@ -13,16 +13,16 @@ router.get("/", async (req, res, next) => {
     })
       .sort({ createdAt: -1 })
       .limit(30)
-      .lean();
+      .populate("reportId", "title status province commune");
 
     const items = notifications.map((notification) => ({
-      ...notification,
-      read: notification.readBy?.some((userId) => userId.toString() === req.user._id.toString()) || false
+      ...notification.toJSON(),
+      read: notification.readBy.some((id) => id.toString() === req.user._id.toString())
     }));
 
     res.json({
-      notifications: items,
-      unread: items.filter((notification) => !notification.read).length
+      unread: items.filter((item) => !item.read).length,
+      notifications: items
     });
   } catch (error) {
     next(error);
@@ -33,10 +33,10 @@ router.patch("/read", async (req, res, next) => {
   try {
     await Notification.updateMany(
       { $or: [{ userId: req.user._id }, { roles: req.user.role }], readBy: { $ne: req.user._id } },
-      { $addToSet: { readBy: req.user._id } }
+      { $push: { readBy: req.user._id } }
     );
 
-    res.json({ ok: true });
+    res.json({ message: "Notifications marked as read" });
   } catch (error) {
     next(error);
   }

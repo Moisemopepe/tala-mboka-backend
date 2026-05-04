@@ -5,7 +5,7 @@ const userSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true, maxlength: 80 },
     phone: { type: String, required: true, unique: true, trim: true, maxlength: 30 },
     password: { type: String, required: true },
-    role: { type: String, enum: ["user", "admin"], default: "user" },
+    role: { type: String, enum: ["user", "moderator", "admin"], default: "user" },
     banned: { type: Boolean, default: false }
   },
   { timestamps: true }
