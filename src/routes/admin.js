@@ -202,6 +202,7 @@ router.get("/stats", async (_req, res, next) => {
       totalUsers,
       pendingReports,
       verifiedReports,
+      rejectedReports,
       pendingModerationReports: pendingReports,
       damageBreakdown: damageRows.map((row) => ({ damageLevel: row._id || "partial", count: row.count })),
       crisisBreakdown: crisisRows.map((row) => ({ crisisType: row._id || "other", count: row.count })),
