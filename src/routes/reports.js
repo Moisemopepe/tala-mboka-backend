@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "crypto";
 import Report from "../models/Report.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { getClientIp, guestReportRateLimit } from "../middleware/rateLimit.js";
@@ -32,11 +33,27 @@ const allowedCrisisTypes = ["flood", "earthquake", "conflict", "fire", "explosio
 const allowedDamageLevels = ["minimal", "partial", "complete"];
 const allowedDebris = ["unknown", "no", "yes"];
 const allowedLanguages = ["ar", "zh", "en", "fr", "ru", "es"];
+const allowedReporterRoles = ["community_member", "local_leader", "ngo", "government", "responder", "other"];
+const allowedChannels = ["web", "mobile", "whatsapp", "api", "import"];
 const publicStatuses = ["verified"];
 const moderationStatuses = ["pending", "verified", "rejected"];
 
 function parseBoolean(value) {
   return value === true || value === "true" || value === "1" || value === 1;
+}
+
+function parseOptionalDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function boundedString(value, limit = 180) {
+  return String(value || "").trim().slice(0, limit);
+}
+
+function hashIp(value = "") {
+  return value ? crypto.createHash("sha256").update(String(value)).digest("hex") : "";
 }
 
 function uploadedFiles(req) {
@@ -56,6 +73,8 @@ function validateReportInput(body) {
     infrastructureType,
     infrastructureName = "",
     assetId = "",
+    crisisId = "default-crisis",
+    collectionTime,
     language = "en",
     crisisType,
     damageLevel,
@@ -70,7 +89,21 @@ function validateReportInput(body) {
     lat,
     lng,
     address = "",
-    addressText = ""
+    addressText = "",
+    reporterName = "",
+    reporterContact = "",
+    reporterOrganization = "",
+    reporterRole = "community_member",
+    reporterConsent = false,
+    channel = "web",
+    offlineCreatedAt,
+    offlineSyncedAt,
+    appVersion = "",
+    deviceId = "",
+    buildingFootprintId = "",
+    buildingFootprintName = "",
+    buildingFootprintSource = "",
+    buildingFootprintGeometry
   } = body;
 
   if (
@@ -126,19 +159,50 @@ function validateReportInput(body) {
     return { message: "Invalid coordinates" };
   }
 
+  let parsedFootprintGeometry = null;
+  if (buildingFootprintGeometry) {
+    try {
+      parsedFootprintGeometry = typeof buildingFootprintGeometry === "string" ? JSON.parse(buildingFootprintGeometry) : buildingFootprintGeometry;
+    } catch {
+      parsedFootprintGeometry = null;
+    }
+  }
+
   return {
     value: {
       title: String(title).trim(),
       description: String(description).trim(),
       category,
       infrastructureType: nextInfrastructureType,
-      infrastructureName: String(infrastructureName).trim(),
-      assetId: String(assetId).trim(),
+      infrastructureName: boundedString(infrastructureName),
+      assetId: boundedString(assetId),
+      crisisId: boundedString(crisisId || "default-crisis", 120) || "default-crisis",
+      collectionTime: parseOptionalDate(collectionTime) || new Date(),
       language: nextLanguage,
       crisisType: nextCrisisType,
       damageLevel: nextDamageLevel,
       debris: nextDebris,
-      locationDescription: String(locationDescription).trim(),
+      locationDescription: boundedString(locationDescription, 300),
+      reporter: {
+        name: boundedString(reporterName, 120),
+        contact: boundedString(reporterContact, 160),
+        organization: boundedString(reporterOrganization, 160),
+        role: allowedReporterRoles.includes(reporterRole) ? reporterRole : "community_member",
+        consentToContact: parseBoolean(reporterConsent)
+      },
+      submissionMeta: {
+        channel: allowedChannels.includes(channel) ? channel : "web",
+        offlineCreatedAt: parseOptionalDate(offlineCreatedAt),
+        offlineSyncedAt: parseOptionalDate(offlineSyncedAt),
+        appVersion: boundedString(appVersion, 80),
+        deviceId: boundedString(deviceId, 160)
+      },
+      buildingFootprint: {
+        id: boundedString(buildingFootprintId || assetId, 180),
+        name: boundedString(buildingFootprintName || infrastructureName, 180),
+        source: boundedString(buildingFootprintSource, 120),
+        ...(parsedFootprintGeometry && typeof parsedFootprintGeometry === "object" ? { geometry: parsedFootprintGeometry } : {})
+      },
       modularAnswers: {
         accessBlocked: parseBoolean(accessBlocked),
         servicesDisrupted: parseBoolean(servicesDisrupted),
@@ -152,17 +216,18 @@ function validateReportInput(body) {
         coordinates: [nextLng, nextLat],
         lat: nextLat,
         lng: nextLng,
-        address: String(address || addressText).trim()
+        address: boundedString(address || addressText, 300)
       },
-      addressText: String(addressText || address || locationDescription).trim()
+      addressText: boundedString(addressText || address || locationDescription, 300)
     }
   };
 }
 
 function publicReport(report) {
+  const { reporter, submissionMeta, ip, userId, createdBy, ...publicFields } = report;
   const moderationStatus = report.status;
   return {
-    ...report,
+    ...publicFields,
     moderationStatus,
     status: moderationStatus,
     risk: report.risk || "suivi",
@@ -211,6 +276,14 @@ async function findPossibleDuplicates(parsedValue) {
     duplicateFilters.push({ ...baseFilter, assetId: parsedValue.assetId });
   }
 
+  if (parsedValue.buildingFootprint?.id) {
+    duplicateFilters.push({
+      ...baseFilter,
+      "buildingFootprint.id": parsedValue.buildingFootprint.id,
+      createdAt: { $gte: new Date(Date.now() - 1000 * 60 * 60 * 24 * 90) }
+    });
+  }
+
   duplicateFilters.push({
     ...baseFilter,
     ...coordinateWindow(parsedValue.location, 300),
@@ -220,7 +293,7 @@ async function findPossibleDuplicates(parsedValue) {
   const nearby = await Report.find({ $or: duplicateFilters })
     .sort({ createdAt: -1 })
     .limit(12)
-    .select("_id title assetId location infrastructureType crisisType damageLevel createdAt")
+    .select("_id title assetId buildingFootprint location infrastructureType crisisType damageLevel createdAt version")
     .lean();
 
   return nearby
@@ -229,7 +302,9 @@ async function findPossibleDuplicates(parsedValue) {
       duplicateScore:
         parsedValue.assetId && item.assetId === parsedValue.assetId
           ? 1
-          : Math.max(0.72, tokenSimilarity(`${parsedValue.title} ${parsedValue.description}`, item.title))
+          : parsedValue.buildingFootprint?.id && item.buildingFootprint?.id === parsedValue.buildingFootprint.id
+            ? 0.95
+            : Math.max(0.72, tokenSimilarity(`${parsedValue.title} ${parsedValue.description}`, item.title))
     }))
     .filter((item) => item.duplicateScore >= 0.72)
     .slice(0, 5);
@@ -237,12 +312,28 @@ async function findPossibleDuplicates(parsedValue) {
 
 async function createReportWithDuplicates(parsedValue, metadata) {
   const possibleDuplicates = await findPossibleDuplicates(parsedValue);
+  const versionAnchor = possibleDuplicates[0]?._id;
+  let nextVersion = 1;
+
+  if (versionAnchor || parsedValue.assetId || parsedValue.buildingFootprint?.id) {
+    const versionFilter = {
+      $or: [
+        ...(versionAnchor ? [{ _id: versionAnchor }, { duplicateOf: versionAnchor }] : []),
+        ...(parsedValue.assetId ? [{ assetId: parsedValue.assetId }] : []),
+        ...(parsedValue.buildingFootprint?.id ? [{ "buildingFootprint.id": parsedValue.buildingFootprint.id }] : [])
+      ]
+    };
+    const latest = await Report.find(versionFilter).sort({ version: -1, createdAt: -1 }).select("version").lean();
+    nextVersion = Math.max(1, Number(latest?.version || 0) + 1);
+  }
+
   const report = await Report.create({
     ...parsedValue,
     ...metadata,
     possibleDuplicateIds: possibleDuplicates.map((item) => item._id),
     duplicateOf: possibleDuplicates[0]?._id || null,
-    duplicateScore: possibleDuplicates[0]?.duplicateScore || 0
+    duplicateScore: possibleDuplicates[0]?.duplicateScore || 0,
+    version: nextVersion
   });
 
   return { report, possibleDuplicates };
@@ -300,35 +391,67 @@ router.get("/export/csv", requireAuth, requireRole("admin", "moderator"), async 
     const reports = await Report.find().sort({ createdAt: -1 }).lean({ virtuals: true });
     const headers = [
       "id",
+      "crisisId",
+      "collectionTime",
       "crisisType",
       "infrastructureType",
+      "infrastructureName",
+      "assetId",
+      "buildingFootprintId",
       "damageLevel",
+      "debris",
       "description",
       "imageUrl",
       "longitude",
       "latitude",
       "addressText",
       "status",
+      "source",
+      "channel",
+      "reporterName",
+      "reporterContact",
+      "reporterOrganization",
+      "reporterRole",
+      "offlineCreatedAt",
+      "offlineSyncedAt",
       "duplicateOf",
+      "duplicateScore",
+      "possibleDuplicateIds",
       "createdAt",
       "updatedAt",
       "version"
     ];
     const rows = reports.map((report) => [
       report._id,
+      report.crisisId || "default-crisis",
+      report.collectionTime?.toISOString?.() || report.collectionTime || "",
       report.crisisType || "",
       report.infrastructureType || report.category || "",
+      report.infrastructureName || "",
+      report.assetId || "",
+      report.buildingFootprint?.id || "",
       report.damageLevel || "",
+      report.debris || "unknown",
       report.description || "",
       report.imageUrl || report.imageUrls?.[0] || "",
       report.location?.lng ?? "",
       report.location?.lat ?? "",
       report.addressText || report.locationDescription || report.location?.address || "",
       report.status,
+      report.source || "",
+      report.submissionMeta?.channel || "",
+      report.reporter?.name || "",
+      report.reporter?.contact || "",
+      report.reporter?.organization || "",
+      report.reporter?.role || "",
+      report.submissionMeta?.offlineCreatedAt?.toISOString?.() || report.submissionMeta?.offlineCreatedAt || "",
+      report.submissionMeta?.offlineSyncedAt?.toISOString?.() || report.submissionMeta?.offlineSyncedAt || "",
       report.duplicateOf || report.possibleDuplicateIds?.[0] || "",
+      report.duplicateScore || 0,
+      (report.possibleDuplicateIds || []).join("|"),
       report.createdAt?.toISOString?.() || report.createdAt || "",
       report.updatedAt?.toISOString?.() || report.updatedAt || "",
-      report.__v ?? 0
+      report.version || report.__v || 1
     ]);
     const csv = [headers, ...rows]
       .map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(","))
@@ -354,11 +477,14 @@ router.get("/export/geojson", requireAuth, requireRole("admin", "moderator"), as
         },
         properties: {
           id: report._id,
+          crisisId: report.crisisId || "default-crisis",
+          collectionTime: report.collectionTime || report.createdAt,
           title: report.title,
           description: report.description,
           infrastructureType: report.infrastructureType || report.category,
           infrastructureName: report.infrastructureName || "",
           assetId: report.assetId || "",
+          buildingFootprint: report.buildingFootprint || {},
           crisisType: report.crisisType || "other",
           damageLevel: report.damageLevel || "partial",
           debris: report.debris || "unknown",
@@ -366,7 +492,12 @@ router.get("/export/geojson", requireAuth, requireRole("admin", "moderator"), as
           locationDescription: report.locationDescription || "",
           addressText: report.addressText || report.locationDescription || report.location?.address || "",
           status: report.status,
+          source: report.source || "",
+          channel: report.submissionMeta?.channel || "",
+          reporter: report.reporter || {},
+          submissionMeta: report.submissionMeta || {},
           duplicateOf: report.duplicateOf || report.possibleDuplicateIds?.[0] || null,
+          version: report.version || 1,
           modularAnswers: report.modularAnswers || {},
           province: report.province,
           commune: report.commune,
@@ -410,6 +541,13 @@ router.post("/guest", guestReportRateLimit, handleReportUpload, async (req, res,
       status: "pending",
       risk: "suivi",
       ip: req.clientIp,
+      submissionMeta: {
+        ...parsed.value.submissionMeta,
+        channel: parsed.value.submissionMeta.channel || "web",
+        offlineSyncedAt: parsed.value.submissionMeta.offlineSyncedAt || (parsed.value.submissionMeta.offlineCreatedAt ? new Date() : null),
+        userAgent: boundedString(req.get("user-agent"), 260),
+        ipHash: hashIp(req.clientIp)
+      },
       imageUrl: images[0] || "",
       imageUrls: images
     });
@@ -441,9 +579,16 @@ router.post("/", requireAuth, handleReportUpload, async (req, res, next) => {
       userId: req.user._id,
       createdBy: req.user._id,
       source: "user",
-        status: "verified",
+      status: "verified",
       risk: "suivi",
       ip: getClientIp(req),
+      submissionMeta: {
+        ...parsed.value.submissionMeta,
+        channel: parsed.value.submissionMeta.channel || "web",
+        offlineSyncedAt: parsed.value.submissionMeta.offlineSyncedAt || (parsed.value.submissionMeta.offlineCreatedAt ? new Date() : null),
+        userAgent: boundedString(req.get("user-agent"), 260),
+        ipHash: hashIp(getClientIp(req))
+      },
       imageUrl: images[0] || "",
       imageUrls: images
     });

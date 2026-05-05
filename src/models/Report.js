@@ -37,6 +37,8 @@ const reportSchema = new mongoose.Schema(
     },
     infrastructureName: { type: String, trim: true, default: "", maxlength: 180 },
     assetId: { type: String, trim: true, default: "", maxlength: 180 },
+    crisisId: { type: String, trim: true, default: "default-crisis", maxlength: 120 },
+    collectionTime: { type: Date, default: Date.now },
     language: {
       type: String,
       enum: ["ar", "zh", "en", "fr", "ru", "es"],
@@ -59,6 +61,38 @@ const reportSchema = new mongoose.Schema(
     },
     locationDescription: { type: String, trim: true, default: "", maxlength: 300 },
     addressText: { type: String, trim: true, default: "", maxlength: 300 },
+    reporter: {
+      name: { type: String, trim: true, default: "", maxlength: 120 },
+      contact: { type: String, trim: true, default: "", maxlength: 160 },
+      organization: { type: String, trim: true, default: "", maxlength: 160 },
+      role: {
+        type: String,
+        enum: ["community_member", "local_leader", "ngo", "government", "responder", "other"],
+        default: "community_member"
+      },
+      consentToContact: { type: Boolean, default: false }
+    },
+    submissionMeta: {
+      channel: { type: String, enum: ["web", "mobile", "whatsapp", "api", "import"], default: "web" },
+      offlineCreatedAt: { type: Date, default: null },
+      offlineSyncedAt: { type: Date, default: null },
+      appVersion: { type: String, trim: true, default: "", maxlength: 80 },
+      deviceId: { type: String, trim: true, default: "", maxlength: 160 },
+      userAgent: { type: String, trim: true, default: "", maxlength: 260 },
+      ipHash: { type: String, trim: true, default: "", maxlength: 96 }
+    },
+    buildingFootprint: {
+      id: { type: String, trim: true, default: "", maxlength: 180 },
+      name: { type: String, trim: true, default: "", maxlength: 180 },
+      source: { type: String, trim: true, default: "", maxlength: 120 },
+      geometry: {
+        type: { type: String, enum: ["Polygon"], default: "Polygon" },
+        coordinates: {
+          type: [[[Number]]],
+          default: undefined
+        }
+      }
+    },
     needs: [{ type: String, trim: true, maxlength: 80 }],
     modularAnswers: {
       accessBlocked: { type: Boolean, default: false },
@@ -109,9 +143,13 @@ const reportSchema = new mongoose.Schema(
 );
 
 reportSchema.index({ createdAt: -1 });
+reportSchema.index({ crisisId: 1, createdAt: -1 });
 reportSchema.index({ category: 1 });
 reportSchema.index({ crisisType: 1, damageLevel: 1 });
 reportSchema.index({ assetId: 1 });
+reportSchema.index({ "buildingFootprint.id": 1 });
+reportSchema.index({ duplicateOf: 1 });
+reportSchema.index({ collectionTime: -1 });
 reportSchema.index({ location: "2dsphere" });
 
 reportSchema.pre("validate", function syncGeoFields(next) {

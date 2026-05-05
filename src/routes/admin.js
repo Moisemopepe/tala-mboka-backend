@@ -51,11 +51,46 @@ function uploadedFiles(req) {
 
 function adminReport(report) {
   const plain = typeof report.toJSON === "function" ? report.toJSON() : report;
+  const accountReporter = plain.userId && typeof plain.userId === "object" ? plain.userId : null;
   return {
     ...plain,
     moderationStatus: plain.status,
     status: plain.status,
-    likesCount: plain.likes?.length || 0
+    likesCount: plain.likes?.length || 0,
+    reporterSummary: {
+      source: plain.source || "guest",
+      channel: plain.submissionMeta?.channel || "web",
+      account: accountReporter
+        ? {
+            id: accountReporter._id,
+            name: accountReporter.name || "",
+            email: accountReporter.email || "",
+            phone: accountReporter.phone || "",
+            role: accountReporter.role || "",
+            banned: Boolean(accountReporter.banned)
+          }
+        : null,
+      submittedBy: accountReporter?.name || plain.reporter?.name || "Anonymous community reporter",
+      contact: accountReporter?.email || accountReporter?.phone || plain.reporter?.contact || "",
+      organization: plain.reporter?.organization || "",
+      role: accountReporter?.role || plain.reporter?.role || "community_member",
+      consentToContact: Boolean(plain.reporter?.consentToContact),
+      offlineCreatedAt: plain.submissionMeta?.offlineCreatedAt || null,
+      offlineSyncedAt: plain.submissionMeta?.offlineSyncedAt || null,
+      appVersion: plain.submissionMeta?.appVersion || "",
+      deviceId: plain.submissionMeta?.deviceId || "",
+      userAgent: plain.submissionMeta?.userAgent || "",
+      ipHash: plain.submissionMeta?.ipHash || ""
+    },
+    responseTrace: {
+      crisisId: plain.crisisId || "default-crisis",
+      collectionTime: plain.collectionTime || plain.createdAt,
+      version: plain.version || 1,
+      duplicateScore: plain.duplicateScore || 0,
+      duplicateOf: plain.duplicateOf || null,
+      possibleDuplicateIds: plain.possibleDuplicateIds || [],
+      buildingFootprint: plain.buildingFootprint || {}
+    }
   };
 }
 
@@ -88,6 +123,28 @@ function normalizeImportedReport(item) {
     debris: firstAllowed(item.debris || "unknown", debrisOptions, "unknown"),
     locationDescription,
     addressText: String(item.addressText || locationDescription).trim().slice(0, 300),
+    crisisId: String(item.crisisId || "default-crisis").trim().slice(0, 120) || "default-crisis",
+    collectionTime: item.collectionTime ? new Date(item.collectionTime) : new Date(),
+    reporter: {
+      name: String(item.reporter?.name || item.reporterName || "").trim().slice(0, 120),
+      contact: String(item.reporter?.contact || item.reporterContact || "").trim().slice(0, 160),
+      organization: String(item.reporter?.organization || item.reporterOrganization || "").trim().slice(0, 160),
+      role: firstAllowed(item.reporter?.role || item.reporterRole || "community_member", ["community_member", "local_leader", "ngo", "government", "responder", "other"], "community_member"),
+      consentToContact: parseBoolean(item.reporter?.consentToContact ?? item.reporterConsent)
+    },
+    submissionMeta: {
+      channel: firstAllowed(item.submissionMeta?.channel || item.channel || "import", ["web", "mobile", "whatsapp", "api", "import"], "import"),
+      offlineCreatedAt: item.submissionMeta?.offlineCreatedAt || item.offlineCreatedAt ? new Date(item.submissionMeta?.offlineCreatedAt || item.offlineCreatedAt) : null,
+      offlineSyncedAt: item.submissionMeta?.offlineSyncedAt || item.offlineSyncedAt ? new Date(item.submissionMeta?.offlineSyncedAt || item.offlineSyncedAt) : null,
+      appVersion: String(item.submissionMeta?.appVersion || item.appVersion || "").trim().slice(0, 80),
+      deviceId: String(item.submissionMeta?.deviceId || item.deviceId || "").trim().slice(0, 160)
+    },
+    buildingFootprint: {
+      id: String(item.buildingFootprint?.id || item.buildingFootprintId || item.assetId || "").trim().slice(0, 180),
+      name: String(item.buildingFootprint?.name || item.buildingFootprintName || item.infrastructureName || "").trim().slice(0, 180),
+      source: String(item.buildingFootprint?.source || item.buildingFootprintSource || "").trim().slice(0, 120),
+      ...(item.buildingFootprint?.geometry ? { geometry: item.buildingFootprint.geometry } : {})
+    },
     needs: Array.isArray(item.needs) ? item.needs.map((need) => String(need).trim().slice(0, 80)).filter(Boolean).slice(0, 8) : [],
     modularAnswers: {
       accessBlocked: parseBoolean(item.modularAnswers?.accessBlocked ?? item.accessBlocked),
@@ -242,6 +299,8 @@ router.get("/reports", async (req, res, next) => {
     const reports = await Report.find(filter)
       .sort({ createdAt: -1 })
       .populate("userId", "name email phone role banned")
+      .populate("duplicateOf", "title damageLevel status version createdAt location")
+      .populate("possibleDuplicateIds", "title damageLevel status version createdAt location")
       .lean({ virtuals: true });
 
     res.json(reports.map(adminReport));
@@ -443,9 +502,26 @@ router.patch("/reports/:id", upload.array("images", 3), async (req, res, next) =
       lat,
       lng,
       addressText,
-      address
+      address,
+      reporterName,
+      reporterContact,
+      reporterOrganization,
+      reporterRole,
+      reporterConsent,
+      channel,
+      offlineCreatedAt,
+      offlineSyncedAt,
+      appVersion,
+      deviceId,
+      buildingFootprintId,
+      buildingFootprintName,
+      buildingFootprintSource
     } = req.body;
     const update = {};
+    const before = await Report.findById(req.params.id).lean();
+    if (!before) {
+      return res.status(404).json({ message: "Report not found" });
+    }
 
     if (title !== undefined) update.title = String(title).trim();
     if (description !== undefined) update.description = String(description).trim();
@@ -490,6 +566,39 @@ router.patch("/reports/:id", upload.array("images", 3), async (req, res, next) =
       update.debris = debris;
     }
     if (locationDescription !== undefined) update.locationDescription = String(locationDescription).trim();
+    if (
+      reporterName !== undefined ||
+      reporterContact !== undefined ||
+      reporterOrganization !== undefined ||
+      reporterRole !== undefined ||
+      reporterConsent !== undefined
+    ) {
+      update.reporter = {
+        name: String(reporterName ?? before?.reporter?.name ?? "").trim().slice(0, 120),
+        contact: String(reporterContact ?? before?.reporter?.contact ?? "").trim().slice(0, 160),
+        organization: String(reporterOrganization ?? before?.reporter?.organization ?? "").trim().slice(0, 160),
+        role: firstAllowed(reporterRole || before?.reporter?.role || "community_member", ["community_member", "local_leader", "ngo", "government", "responder", "other"], "community_member"),
+        consentToContact: reporterConsent !== undefined ? parseBoolean(reporterConsent) : Boolean(before?.reporter?.consentToContact)
+      };
+    }
+    if (channel !== undefined || offlineCreatedAt !== undefined || offlineSyncedAt !== undefined || appVersion !== undefined || deviceId !== undefined) {
+      update.submissionMeta = {
+        ...(before?.submissionMeta || {}),
+        ...(channel !== undefined ? { channel: firstAllowed(channel, ["web", "mobile", "whatsapp", "api", "import"], "web") } : {}),
+        ...(offlineCreatedAt !== undefined ? { offlineCreatedAt: offlineCreatedAt ? new Date(offlineCreatedAt) : null } : {}),
+        ...(offlineSyncedAt !== undefined ? { offlineSyncedAt: offlineSyncedAt ? new Date(offlineSyncedAt) : null } : {}),
+        ...(appVersion !== undefined ? { appVersion: String(appVersion).trim().slice(0, 80) } : {}),
+        ...(deviceId !== undefined ? { deviceId: String(deviceId).trim().slice(0, 160) } : {})
+      };
+    }
+    if (buildingFootprintId !== undefined || buildingFootprintName !== undefined || buildingFootprintSource !== undefined) {
+      update.buildingFootprint = {
+        ...(before?.buildingFootprint || {}),
+        id: String(buildingFootprintId ?? before?.buildingFootprint?.id ?? "").trim().slice(0, 180),
+        name: String(buildingFootprintName ?? before?.buildingFootprint?.name ?? "").trim().slice(0, 180),
+        source: String(buildingFootprintSource ?? before?.buildingFootprint?.source ?? "").trim().slice(0, 120)
+      };
+    }
     if (addressText !== undefined || address !== undefined) {
       update.addressText = String(addressText || address || "").trim();
     }
@@ -527,11 +636,6 @@ router.patch("/reports/:id", upload.array("images", 3), async (req, res, next) =
 
     if (update.title === "" || update.description === "") {
       return res.status(400).json({ message: "Title and description cannot be empty" });
-    }
-
-    const before = await Report.findById(req.params.id).lean();
-    if (!before) {
-      return res.status(404).json({ message: "Report not found" });
     }
 
     const report = await Report.findByIdAndUpdate(req.params.id, update, {
