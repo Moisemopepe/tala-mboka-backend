@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { requireAdmin, requireAuth, requireRole } from "../middleware/auth.js";
 import { upload } from "../middleware/upload.js";
+import AdminAudit from "../models/AdminAudit.js";
 import Report from "../models/Report.js";
 import User from "../models/User.js";
 import { uploadReportImages } from "../services/cloudinary.js";
@@ -113,6 +114,18 @@ function normalizeImportedReport(item) {
     createdAt: item.createdAt ? new Date(item.createdAt) : undefined,
     updatedAt: item.updatedAt ? new Date(item.updatedAt) : undefined
   };
+}
+
+async function writeAudit(req, { action, targetType, targetId, summary = "", changes = {} }) {
+  if (!req.user?._id || !targetId) return;
+  await AdminAudit.create({
+    actor: req.user._id,
+    action,
+    targetType,
+    targetId,
+    summary,
+    changes
+  });
 }
 
 router.post("/login", async (req, res, next) => {
@@ -236,6 +249,20 @@ router.get("/reports", async (req, res, next) => {
   }
 });
 
+router.get("/audit", requireAdmin, async (_req, res, next) => {
+  try {
+    const entries = await AdminAudit.find()
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .populate("actor", "name phone role")
+      .lean();
+
+    res.json(entries);
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/reports/import", requireAdmin, async (req, res, next) => {
   try {
     const reports = Array.isArray(req.body?.reports) ? req.body.reports : [];
@@ -283,6 +310,13 @@ router.patch("/reports/:id/approve", async (req, res, next) => {
 
     if (!report) return res.status(404).json({ message: "Report not found" });
 
+    await writeAudit(req, {
+      action: "report_verified",
+      targetType: "report",
+      targetId: report._id,
+      summary: `${report.title} verified`
+    });
+
     await notifyRoles({
       reportId: report._id,
       type: "report_approved",
@@ -312,6 +346,14 @@ router.patch("/reports/:id/reject", async (req, res, next) => {
     ).populate("userId", "name phone role banned");
 
     if (!report) return res.status(404).json({ message: "Report not found" });
+
+    await writeAudit(req, {
+      action: "report_rejected",
+      targetType: "report",
+      targetId: report._id,
+      summary: `${report.title} rejected`,
+      changes: { reason: report.rejectionReason }
+    });
 
     await notifyRoles({
       reportId: report._id,
@@ -350,6 +392,14 @@ router.patch("/reports/:id/status", async (req, res, next) => {
     if (!report) {
       return res.status(404).json({ message: "Report not found" });
     }
+
+    await writeAudit(req, {
+      action: "report_status_updated",
+      targetType: "report",
+      targetId: report._id,
+      summary: `${report.title} changed to ${report.status}`,
+      changes: { status: report.status }
+    });
 
     await notifyRoles({
       reportId: report._id,
@@ -478,6 +528,11 @@ router.patch("/reports/:id", upload.array("images", 3), async (req, res, next) =
       return res.status(400).json({ message: "Title and description cannot be empty" });
     }
 
+    const before = await Report.findById(req.params.id).lean();
+    if (!before) {
+      return res.status(404).json({ message: "Report not found" });
+    }
+
     const report = await Report.findByIdAndUpdate(req.params.id, update, {
       new: true,
       runValidators: true
@@ -486,6 +541,14 @@ router.patch("/reports/:id", upload.array("images", 3), async (req, res, next) =
     if (!report) {
       return res.status(404).json({ message: "Report not found" });
     }
+
+    await writeAudit(req, {
+      action: "report_edited",
+      targetType: "report",
+      targetId: report._id,
+      summary: `${report.title} edited`,
+      changes: { before: { status: before.status, title: before.title }, after: update }
+    });
 
     res.json(adminReport(report));
   } catch (error) {
@@ -500,6 +563,13 @@ router.delete("/reports/:id", async (req, res, next) => {
     if (!report) {
       return res.status(404).json({ message: "Report not found" });
     }
+
+    await writeAudit(req, {
+      action: "report_deleted",
+      targetType: "report",
+      targetId: report._id,
+      summary: `${report.title} deleted`
+    });
 
     res.json({ message: "Report deleted" });
   } catch (error) {
@@ -566,6 +636,13 @@ router.post("/users", requireAdmin, async (req, res, next) => {
       role
     });
 
+    await writeAudit(req, {
+      action: "user_created",
+      targetType: "user",
+      targetId: user._id,
+      summary: `${user.name} created as ${user.role}`
+    });
+
     res.status(201).json(user);
   } catch (error) {
     next(error);
@@ -585,6 +662,13 @@ router.patch("/users/:id/ban", requireAdmin, async (req, res, next) => {
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
+
+    await writeAudit(req, {
+      action: user.banned ? "user_suspended" : "user_unsuspended",
+      targetType: "user",
+      targetId: user._id,
+      summary: `${user.name} ${user.banned ? "suspended" : "reactivated"}`
+    });
 
     res.json(user);
   } catch (error) {
@@ -610,7 +694,40 @@ router.patch("/users/:id/role", requireAdmin, async (req, res, next) => {
       return res.status(404).json({ message: "User not found" });
     }
 
+    await writeAudit(req, {
+      action: "user_role_updated",
+      targetType: "user",
+      targetId: user._id,
+      summary: `${user.name} role changed to ${user.role}`,
+      changes: { role }
+    });
+
     res.json(user);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/users/:id", requireAdmin, async (req, res, next) => {
+  try {
+    if (req.params.id === req.user._id.toString()) {
+      return res.status(400).json({ message: "You cannot delete yourself" });
+    }
+
+    const user = await User.findByIdAndDelete(req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    await writeAudit(req, {
+      action: "user_deleted",
+      targetType: "user",
+      targetId: user._id,
+      summary: `${user.name} deleted`
+    });
+
+    res.json({ message: "User deleted" });
   } catch (error) {
     next(error);
   }

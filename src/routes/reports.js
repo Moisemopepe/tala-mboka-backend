@@ -179,6 +179,26 @@ function coordinateWindow(location, radiusMeters = 120) {
   };
 }
 
+function textTokens(value = "") {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length > 3)
+    .slice(0, 16);
+}
+
+function tokenSimilarity(left = "", right = "") {
+  const a = new Set(textTokens(left));
+  const b = new Set(textTokens(right));
+  if (!a.size || !b.size) return 0;
+  let overlap = 0;
+  for (const token of a) {
+    if (b.has(token)) overlap += 1;
+  }
+  return overlap / Math.max(a.size, b.size);
+}
+
 async function findPossibleDuplicates(parsedValue) {
   const baseFilter = {
     status: { $in: ["pending", "verified"] },
@@ -193,15 +213,26 @@ async function findPossibleDuplicates(parsedValue) {
 
   duplicateFilters.push({
     ...baseFilter,
-    ...coordinateWindow(parsedValue.location),
-    createdAt: { $gte: new Date(Date.now() - 1000 * 60 * 60 * 24 * 14) }
+    ...coordinateWindow(parsedValue.location, 300),
+    createdAt: { $gte: new Date(Date.now() - 1000 * 60 * 60 * 24 * 21) }
   });
 
-  return Report.find({ $or: duplicateFilters })
+  const nearby = await Report.find({ $or: duplicateFilters })
     .sort({ createdAt: -1 })
-    .limit(5)
+    .limit(12)
     .select("_id title assetId location infrastructureType crisisType damageLevel createdAt")
     .lean();
+
+  return nearby
+    .map((item) => ({
+      ...item,
+      duplicateScore:
+        parsedValue.assetId && item.assetId === parsedValue.assetId
+          ? 1
+          : Math.max(0.72, tokenSimilarity(`${parsedValue.title} ${parsedValue.description}`, item.title))
+    }))
+    .filter((item) => item.duplicateScore >= 0.72)
+    .slice(0, 5);
 }
 
 async function createReportWithDuplicates(parsedValue, metadata) {
@@ -211,7 +242,7 @@ async function createReportWithDuplicates(parsedValue, metadata) {
     ...metadata,
     possibleDuplicateIds: possibleDuplicates.map((item) => item._id),
     duplicateOf: possibleDuplicates[0]?._id || null,
-    duplicateScore: possibleDuplicates.length > 0 ? (parsedValue.assetId ? 1 : 0.72) : 0
+    duplicateScore: possibleDuplicates[0]?.duplicateScore || 0
   });
 
   return { report, possibleDuplicates };
