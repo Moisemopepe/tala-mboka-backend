@@ -264,9 +264,20 @@ function tokenSimilarity(left = "", right = "") {
   return overlap / Math.max(a.size, b.size);
 }
 
+function distanceScore(left, right) {
+  if (!left?.lat || !left?.lng || !right?.lat || !right?.lng) return 0;
+  const km = Math.hypot(left.lat - right.lat, left.lng - right.lng) * 111;
+  if (km <= 0.03) return 0.96;
+  if (km <= 0.08) return 0.9;
+  if (km <= 0.18) return 0.82;
+  if (km <= 0.3) return 0.74;
+  return 0;
+}
+
 async function findPossibleDuplicates(parsedValue) {
   const baseFilter = {
     status: { $in: ["pending", "verified"] },
+    crisisId: parsedValue.crisisId || "default-crisis",
     infrastructureType: parsedValue.infrastructureType,
     crisisType: parsedValue.crisisType
   };
@@ -284,27 +295,35 @@ async function findPossibleDuplicates(parsedValue) {
     });
   }
 
-  duplicateFilters.push({
-    ...baseFilter,
-    ...coordinateWindow(parsedValue.location, 300),
-    createdAt: { $gte: new Date(Date.now() - 1000 * 60 * 60 * 24 * 21) }
-  });
+  duplicateFilters.push(
+    {
+      ...baseFilter,
+      ...coordinateWindow(parsedValue.location, 300),
+      createdAt: { $gte: new Date(Date.now() - 1000 * 60 * 60 * 24 * 45) }
+    },
+    {
+      status: { $in: ["pending", "verified"] },
+      crisisId: parsedValue.crisisId || "default-crisis",
+      ...coordinateWindow(parsedValue.location, 90),
+      createdAt: { $gte: new Date(Date.now() - 1000 * 60 * 60 * 24 * 120) }
+    }
+  );
 
   const nearby = await Report.find({ $or: duplicateFilters })
     .sort({ createdAt: -1 })
     .limit(12)
-    .select("_id title assetId buildingFootprint location infrastructureType crisisType damageLevel createdAt version")
+    .select("_id title description assetId buildingFootprint location infrastructureType crisisType damageLevel collectionTime createdAt version")
     .lean();
 
   return nearby
     .map((item) => ({
       ...item,
-      duplicateScore:
-        parsedValue.assetId && item.assetId === parsedValue.assetId
-          ? 1
-          : parsedValue.buildingFootprint?.id && item.buildingFootprint?.id === parsedValue.buildingFootprint.id
-            ? 0.95
-            : Math.max(0.72, tokenSimilarity(`${parsedValue.title} ${parsedValue.description}`, item.title))
+      duplicateScore: Math.max(
+        parsedValue.assetId && item.assetId === parsedValue.assetId ? 1 : 0,
+        parsedValue.buildingFootprint?.id && item.buildingFootprint?.id === parsedValue.buildingFootprint.id ? 0.97 : 0,
+        distanceScore(parsedValue.location, item.location),
+        tokenSimilarity(`${parsedValue.title} ${parsedValue.description}`, `${item.title} ${item.description || ""}`) * 0.92
+      )
     }))
     .filter((item) => item.duplicateScore >= 0.72)
     .slice(0, 5);
@@ -341,9 +360,10 @@ async function createReportWithDuplicates(parsedValue, metadata) {
 
 router.get("/", async (req, res, next) => {
   try {
-    const { sort = "newest", category, province, commune, status, crisisType, damageLevel, infrastructureType, nearLat, nearLng } = req.query;
+    const { sort = "newest", category, province, commune, status, crisisId, crisisType, damageLevel, infrastructureType, nearLat, nearLng } = req.query;
     const filter = { status: { $in: publicStatuses } };
 
+    if (crisisId) filter.crisisId = crisisId;
     if (category && allowedCategories.includes(category)) filter.category = category;
     if (infrastructureType && allowedInfrastructureTypes.includes(infrastructureType)) filter.infrastructureType = infrastructureType;
     if (province) filter.province = province;
@@ -386,9 +406,10 @@ router.get("/mine", requireAuth, async (req, res, next) => {
   }
 });
 
-router.get("/export/csv", requireAuth, requireRole("admin", "moderator"), async (_req, res, next) => {
+router.get("/export/csv", requireAuth, requireRole("admin", "moderator"), async (req, res, next) => {
   try {
-    const reports = await Report.find().sort({ createdAt: -1 }).lean({ virtuals: true });
+    const filter = req.query.crisisId ? { crisisId: req.query.crisisId } : {};
+    const reports = await Report.find(filter).sort({ createdAt: -1 }).lean({ virtuals: true });
     const headers = [
       "id",
       "crisisId",
@@ -464,9 +485,10 @@ router.get("/export/csv", requireAuth, requireRole("admin", "moderator"), async 
   }
 });
 
-router.get("/export/geojson", requireAuth, requireRole("admin", "moderator"), async (_req, res, next) => {
+router.get("/export/geojson", requireAuth, requireRole("admin", "moderator"), async (req, res, next) => {
   try {
-    const reports = await Report.find().sort({ createdAt: -1 }).lean({ virtuals: true });
+    const filter = req.query.crisisId ? { crisisId: req.query.crisisId } : {};
+    const reports = await Report.find(filter).sort({ createdAt: -1 }).lean({ virtuals: true });
     res.json({
       type: "FeatureCollection",
       features: reports.map((report) => ({

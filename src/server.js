@@ -9,6 +9,7 @@ import { fileURLToPath } from "url";
 import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
 import notificationRoutes from "./routes/notifications.js";
+import crisisRoutes from "./routes/crises.js";
 import reportRoutes from "./routes/reports.js";
 import { ensureConfiguredAdmin } from "./services/adminBootstrap.js";
 import { sendAutomaticVersionNotifications } from "./services/versionNotifications.js";
@@ -31,6 +32,7 @@ app.get("/api/health", (_req, res) => {
 
 app.use("/api", authRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/crises", crisisRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/reports", reportRoutes);
 

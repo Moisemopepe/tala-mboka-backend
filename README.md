@@ -7,6 +7,7 @@ Node.js + Express API for Tala Mboka Crisis.
 - JWT admin/moderator authentication with bcrypt password hashing.
 - Public guest report intake with image upload, validation, rate limiting, and offline-sync metadata.
 - MongoDB report model with geolocation, damage classification, reporter metadata, building footprint reference, duplicate tracking, and versioning.
+- Multi-crisis workspaces through `crisisId`, with crisis-scoped feeds, exports, and duplicate detection.
 - Admin-only report validation, editing, deletion, user management, and audit trail.
 - CSV and GeoJSON exports for UNDP/GIS workflows.
 
@@ -26,6 +27,10 @@ For production scale, run MongoDB Atlas with backups and autoscaling, store imag
 - `GET /api/admin/users`
 - `POST /api/admin/users`
 - `GET /api/admin/audit`
+- `GET /api/crises`
+- `GET /api/crises/admin`
+- `POST /api/crises`
+- `PATCH /api/crises/:id`
 - `POST /api/reports/guest`
 - `GET /api/reports`
 - `GET /api/reports/export/csv`

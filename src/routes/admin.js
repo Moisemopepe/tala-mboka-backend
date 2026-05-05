@@ -295,6 +295,7 @@ router.get("/reports", async (req, res, next) => {
   try {
     const filter = {};
     if (req.query.status && statuses.includes(req.query.status)) filter.status = req.query.status;
+    if (req.query.crisisId) filter.crisisId = String(req.query.crisisId).trim();
 
     const reports = await Report.find(filter)
       .sort({ createdAt: -1 })
