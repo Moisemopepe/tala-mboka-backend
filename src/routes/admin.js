@@ -130,15 +130,16 @@ async function writeAudit(req, { action, targetType, targetId, summary = "", cha
 
 router.post("/login", async (req, res, next) => {
   try {
-    const { phone, password } = req.body;
+    const { email, phone, password } = req.body;
+    const identifier = String(email || phone || "").toLowerCase().trim();
 
-    if (!phone || !password) {
-      return res.status(400).json({ message: "Phone and password are required" });
+    if (!identifier || !password) {
+      return res.status(400).json({ message: "Email and password are required" });
     }
 
-    const user = await User.findOne({ phone });
+    const user = await User.findOne({ $or: [{ email: identifier }, { phone: identifier }] });
     if (!user) {
-      return res.status(401).json({ message: "Invalid phone or password" });
+      return res.status(401).json({ message: "Invalid email or password" });
     }
 
     if (user.banned) {
@@ -151,7 +152,7 @@ router.post("/login", async (req, res, next) => {
 
     const isValid = await bcrypt.compare(password, user.password);
     if (!isValid) {
-      return res.status(401).json({ message: "Invalid phone or password" });
+      return res.status(401).json({ message: "Invalid email or password" });
     }
 
     res.json({ token: signToken(user), user });
@@ -240,7 +241,7 @@ router.get("/reports", async (req, res, next) => {
 
     const reports = await Report.find(filter)
       .sort({ createdAt: -1 })
-      .populate("userId", "name phone role banned")
+      .populate("userId", "name email phone role banned")
       .lean({ virtuals: true });
 
     res.json(reports.map(adminReport));
@@ -254,7 +255,7 @@ router.get("/audit", requireAdmin, async (_req, res, next) => {
     const entries = await AdminAudit.find()
       .sort({ createdAt: -1 })
       .limit(100)
-      .populate("actor", "name phone role")
+      .populate("actor", "name email phone role")
       .lean();
 
     res.json(entries);
@@ -306,7 +307,7 @@ router.patch("/reports/:id/approve", async (req, res, next) => {
       req.params.id,
       { status: "verified", rejectionReason: "" },
       { new: true }
-    ).populate("userId", "name phone role banned");
+    ).populate("userId", "name email phone role banned");
 
     if (!report) return res.status(404).json({ message: "Report not found" });
 
@@ -343,7 +344,7 @@ router.patch("/reports/:id/reject", async (req, res, next) => {
       req.params.id,
       { status: "rejected", rejectionReason: String(req.body.reason || "").trim() },
       { new: true }
-    ).populate("userId", "name phone role banned");
+    ).populate("userId", "name email phone role banned");
 
     if (!report) return res.status(404).json({ message: "Report not found" });
 
@@ -387,7 +388,7 @@ router.patch("/reports/:id/status", async (req, res, next) => {
       req.params.id,
       { status, rejectionReason: status === "rejected" ? String(req.body.reason || "").trim() : "" },
       { new: true, runValidators: true }
-    ).populate("userId", "name phone");
+    ).populate("userId", "name email phone");
 
     if (!report) {
       return res.status(404).json({ message: "Report not found" });
@@ -536,7 +537,7 @@ router.patch("/reports/:id", upload.array("images", 3), async (req, res, next) =
     const report = await Report.findByIdAndUpdate(req.params.id, update, {
       new: true,
       runValidators: true
-    }).populate("userId", "name phone role banned");
+    }).populate("userId", "name email phone role banned");
 
     if (!report) {
       return res.status(404).json({ message: "Report not found" });
@@ -591,6 +592,7 @@ router.get("/users", requireAdmin, async (_req, res, next) => {
       {
         $project: {
           name: 1,
+          email: 1,
           phone: 1,
           role: 1,
           banned: 1,
@@ -609,10 +611,16 @@ router.get("/users", requireAdmin, async (_req, res, next) => {
 
 router.post("/users", requireAdmin, async (req, res, next) => {
   try {
-    const { name, phone, password, role = "moderator" } = req.body;
+    const { name, email, phone, password, role = "moderator" } = req.body;
+    const normalizedEmail = String(email || "").toLowerCase().trim();
+    const normalizedPhone = String(phone || "").trim();
 
-    if (!name?.trim() || !phone?.trim() || !password) {
-      return res.status(400).json({ message: "Name, phone and password are required" });
+    if (!name?.trim() || !normalizedEmail || !password) {
+      return res.status(400).json({ message: "Name, email and password are required" });
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return res.status(400).json({ message: "Enter a valid email address" });
     }
 
     if (!["moderator", "admin"].includes(role)) {
@@ -623,15 +631,19 @@ router.post("/users", requireAdmin, async (req, res, next) => {
       return res.status(400).json({ message: "Password must be at least 6 characters" });
     }
 
-    const existingUser = await User.findOne({ phone: String(phone).trim() });
+    const duplicateFilter = normalizedPhone
+      ? { $or: [{ email: normalizedEmail }, { phone: normalizedPhone }] }
+      : { email: normalizedEmail };
+    const existingUser = await User.findOne(duplicateFilter);
     if (existingUser) {
-      return res.status(409).json({ message: "Phone number already registered" });
+      return res.status(409).json({ message: "Admin user already registered" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
     const user = await User.create({
       name: String(name).trim(),
-      phone: String(phone).trim(),
+      email: normalizedEmail,
+      ...(normalizedPhone ? { phone: normalizedPhone } : {}),
       password: hashedPassword,
       role
     });
