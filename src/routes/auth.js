@@ -11,6 +11,10 @@ function signToken(user) {
 
 router.post("/register", async (req, res, next) => {
   try {
+    if (process.env.PUBLIC_REGISTRATION !== "true") {
+      return res.status(403).json({ message: "Public registration is disabled" });
+    }
+
     const { name, phone, password } = req.body;
 
     if (!name || !phone || !password) {

@@ -2,8 +2,10 @@ import express from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { requireAdmin, requireAuth, requireRole } from "../middleware/auth.js";
+import { upload } from "../middleware/upload.js";
 import Report from "../models/Report.js";
 import User from "../models/User.js";
+import { uploadReportImages } from "../services/cloudinary.js";
 import { notifyRoles, notifyUser } from "../services/notifications.js";
 
 const router = express.Router();
@@ -40,6 +42,10 @@ function parseBoolean(value) {
 
 function signToken(user) {
   return jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
+}
+
+function uploadedFiles(req) {
+  return req.files || (req.file ? [req.file] : []);
 }
 
 function adminReport(report) {
@@ -365,7 +371,7 @@ router.patch("/reports/:id/status", async (req, res, next) => {
   }
 });
 
-router.patch("/reports/:id", async (req, res, next) => {
+router.patch("/reports/:id", upload.array("images", 3), async (req, res, next) => {
   try {
     const {
       title,
@@ -384,7 +390,9 @@ router.patch("/reports/:id", async (req, res, next) => {
       commune,
       status,
       lat,
-      lng
+      lng,
+      addressText,
+      address
     } = req.body;
     const update = {};
 
@@ -431,6 +439,9 @@ router.patch("/reports/:id", async (req, res, next) => {
       update.debris = debris;
     }
     if (locationDescription !== undefined) update.locationDescription = String(locationDescription).trim();
+    if (addressText !== undefined || address !== undefined) {
+      update.addressText = String(addressText || address || "").trim();
+    }
     if (modularAnswers !== undefined && typeof modularAnswers === "object") {
       update.modularAnswers = {
         accessBlocked: parseBoolean(modularAnswers.accessBlocked),
@@ -452,6 +463,15 @@ router.patch("/reports/:id", async (req, res, next) => {
         return res.status(400).json({ message: "Invalid coordinates" });
       }
       update.location = { lat: nextLat, lng: nextLng };
+      if (addressText !== undefined || address !== undefined) {
+        update.location.address = String(addressText || address || "").trim();
+      }
+    }
+
+    const images = await uploadReportImages(uploadedFiles(req));
+    if (images.length > 0) {
+      update.imageUrl = images[0];
+      update.imageUrls = images;
     }
 
     if (update.title === "" || update.description === "") {
@@ -512,6 +532,41 @@ router.get("/users", requireAdmin, async (_req, res, next) => {
     ]);
 
     res.json(users);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/users", requireAdmin, async (req, res, next) => {
+  try {
+    const { name, phone, password, role = "moderator" } = req.body;
+
+    if (!name?.trim() || !phone?.trim() || !password) {
+      return res.status(400).json({ message: "Name, phone and password are required" });
+    }
+
+    if (!["moderator", "admin"].includes(role)) {
+      return res.status(400).json({ message: "Only moderator or admin accounts can be created here" });
+    }
+
+    if (String(password).length < 6) {
+      return res.status(400).json({ message: "Password must be at least 6 characters" });
+    }
+
+    const existingUser = await User.findOne({ phone: String(phone).trim() });
+    if (existingUser) {
+      return res.status(409).json({ message: "Phone number already registered" });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const user = await User.create({
+      name: String(name).trim(),
+      phone: String(phone).trim(),
+      password: hashedPassword,
+      role
+    });
+
+    res.status(201).json(user);
   } catch (error) {
     next(error);
   }
