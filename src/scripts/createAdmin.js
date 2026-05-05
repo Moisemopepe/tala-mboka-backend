@@ -6,7 +6,7 @@ import User from "../models/User.js";
 dotenv.config();
 
 const { MONGODB_URI } = process.env;
-const ADMIN_NAME = process.env.ADMIN_NAME || "Moise Mopepe";
+const ADMIN_NAME = process.env.PRIMARY_ADMIN_NAME || "Moise Mopepe";
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "moisemopepe3@gmail.com").toLowerCase().trim();
 const ADMIN_PHONE = String(process.env.ADMIN_PHONE || "0850767267").trim();
 const ADMIN_PASSWORD = process.env.PRIMARY_ADMIN_PASSWORD || "Mokili243@#$";

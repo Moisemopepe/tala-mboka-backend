@@ -2,7 +2,7 @@ import bcrypt from "bcryptjs";
 import User from "../models/User.js";
 
 export async function ensureConfiguredAdmin() {
-  const adminName = process.env.ADMIN_NAME || "Moise Mopepe";
+  const adminName = process.env.PRIMARY_ADMIN_NAME || "Moise Mopepe";
   const adminEmail = (process.env.ADMIN_EMAIL || "moisemopepe3@gmail.com").toLowerCase().trim();
   const adminPhone = String(process.env.ADMIN_PHONE || "0850767267").trim();
   const adminPassword = process.env.PRIMARY_ADMIN_PASSWORD || "Mokili243@#$";
