@@ -60,6 +60,14 @@ function uploadedFiles(req) {
   return req.files || (req.file ? [req.file] : []);
 }
 
+function requireReportImage(req, res) {
+  if (uploadedFiles(req).length === 0) {
+    res.status(400).json({ message: "At least one photo is required for damage assessment" });
+    return false;
+  }
+  return true;
+}
+
 function handleReportUpload(req, res, next) {
   if (!req.is("multipart/form-data")) return next();
   return upload.array("images", 3)(req, res, next);
@@ -550,6 +558,7 @@ router.get("/:id", async (req, res, next) => {
 
 router.post("/guest", guestReportRateLimit, handleReportUpload, async (req, res, next) => {
   try {
+    if (!requireReportImage(req, res)) return;
     const parsed = validateReportInput(req.body);
     if (parsed.message) return res.status(400).json({ message: parsed.message });
 
@@ -593,6 +602,7 @@ router.post("/guest", guestReportRateLimit, handleReportUpload, async (req, res,
 
 router.post("/", requireAuth, handleReportUpload, async (req, res, next) => {
   try {
+    if (!requireReportImage(req, res)) return;
     const parsed = validateReportInput(req.body);
     if (parsed.message) return res.status(400).json({ message: parsed.message });
 

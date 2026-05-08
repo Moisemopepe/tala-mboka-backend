@@ -36,6 +36,8 @@ const crisisTypes = ["earthquake", "flood", "fire", "explosion", "chemical_incid
 const damageLevels = ["minimal", "partial", "complete"];
 const debrisOptions = ["unknown", "no", "yes"];
 const languages = ["ar", "zh", "en", "fr", "ru", "es"];
+const adminOnly = [requireAuth, requireAdmin];
+const adminOrModerator = [requireAuth, requireRole("admin", "moderator")];
 
 function parseBoolean(value) {
   return value === true || value === "true" || value === "1" || value === 1;
@@ -220,7 +222,7 @@ router.post("/login", async (req, res, next) => {
 
 router.use(requireAuth, requireRole("admin", "moderator"));
 
-router.post("/version-notifications", requireAdmin, async (req, res, next) => {
+router.post("/version-notifications", ...adminOnly, async (req, res, next) => {
   try {
     const { version, adminNotes, userNotes } = req.body;
     const trimmedVersion = String(version || "").trim();
@@ -255,7 +257,7 @@ router.post("/version-notifications", requireAdmin, async (req, res, next) => {
   }
 });
 
-router.get("/stats", async (_req, res, next) => {
+router.get("/stats", ...adminOrModerator, async (_req, res, next) => {
   try {
     const [totalReports, totalUsers, pendingReports, verifiedReports, rejectedReports, damageRows, crisisRows, infrastructureRows, statusRows] = await Promise.all([
       Report.countDocuments(),
@@ -291,7 +293,7 @@ router.get("/stats", async (_req, res, next) => {
   }
 });
 
-router.get("/reports", async (req, res, next) => {
+router.get("/reports", ...adminOrModerator, async (req, res, next) => {
   try {
     const filter = {};
     if (req.query.status && statuses.includes(req.query.status)) filter.status = req.query.status;
@@ -310,7 +312,7 @@ router.get("/reports", async (req, res, next) => {
   }
 });
 
-router.get("/audit", requireAdmin, async (_req, res, next) => {
+router.get("/audit", ...adminOnly, async (_req, res, next) => {
   try {
     const entries = await AdminAudit.find()
       .sort({ createdAt: -1 })
@@ -324,7 +326,7 @@ router.get("/audit", requireAdmin, async (_req, res, next) => {
   }
 });
 
-router.post("/reports/import", requireAdmin, async (req, res, next) => {
+router.post("/reports/import", ...adminOnly, async (req, res, next) => {
   try {
     const reports = Array.isArray(req.body?.reports) ? req.body.reports : [];
 
@@ -361,7 +363,7 @@ router.post("/reports/import", requireAdmin, async (req, res, next) => {
   }
 });
 
-router.patch("/reports/:id/approve", async (req, res, next) => {
+router.patch("/reports/:id/approve", ...adminOrModerator, async (req, res, next) => {
   try {
     const report = await Report.findByIdAndUpdate(
       req.params.id,
@@ -398,7 +400,7 @@ router.patch("/reports/:id/approve", async (req, res, next) => {
   }
 });
 
-router.patch("/reports/:id/reject", async (req, res, next) => {
+router.patch("/reports/:id/reject", ...adminOrModerator, async (req, res, next) => {
   try {
     const report = await Report.findByIdAndUpdate(
       req.params.id,
@@ -436,7 +438,7 @@ router.patch("/reports/:id/reject", async (req, res, next) => {
   }
 });
 
-router.patch("/reports/:id/status", async (req, res, next) => {
+router.patch("/reports/:id/status", ...adminOrModerator, async (req, res, next) => {
   try {
     const { status } = req.body;
 
@@ -482,7 +484,7 @@ router.patch("/reports/:id/status", async (req, res, next) => {
   }
 });
 
-router.patch("/reports/:id", upload.array("images", 3), async (req, res, next) => {
+router.patch("/reports/:id", ...adminOrModerator, upload.array("images", 3), async (req, res, next) => {
   try {
     const {
       title,
@@ -662,7 +664,7 @@ router.patch("/reports/:id", upload.array("images", 3), async (req, res, next) =
   }
 });
 
-router.delete("/reports/:id", async (req, res, next) => {
+router.delete("/reports/:id", ...adminOrModerator, async (req, res, next) => {
   try {
     const report = await Report.findByIdAndDelete(req.params.id);
 
@@ -683,7 +685,7 @@ router.delete("/reports/:id", async (req, res, next) => {
   }
 });
 
-router.get("/users", requireAdmin, async (_req, res, next) => {
+router.get("/users", ...adminOnly, async (_req, res, next) => {
   try {
     const users = await User.aggregate([
       {
@@ -714,7 +716,7 @@ router.get("/users", requireAdmin, async (_req, res, next) => {
   }
 });
 
-router.post("/users", requireAdmin, async (req, res, next) => {
+router.post("/users", ...adminOnly, async (req, res, next) => {
   try {
     const { name, email, phone, password, role = "moderator" } = req.body;
     const normalizedEmail = String(email || "").toLowerCase().trim();
@@ -766,7 +768,7 @@ router.post("/users", requireAdmin, async (req, res, next) => {
   }
 });
 
-router.patch("/users/:id/ban", requireAdmin, async (req, res, next) => {
+router.patch("/users/:id/ban", ...adminOnly, async (req, res, next) => {
   try {
     if (req.params.id === req.user._id.toString()) {
       return res.status(400).json({ message: "You cannot ban yourself" });
@@ -793,7 +795,7 @@ router.patch("/users/:id/ban", requireAdmin, async (req, res, next) => {
   }
 });
 
-router.patch("/users/:id/role", requireAdmin, async (req, res, next) => {
+router.patch("/users/:id/role", ...adminOnly, async (req, res, next) => {
   try {
     const { role } = req.body;
 
@@ -825,7 +827,7 @@ router.patch("/users/:id/role", requireAdmin, async (req, res, next) => {
   }
 });
 
-router.delete("/users/:id", requireAdmin, async (req, res, next) => {
+router.delete("/users/:id", ...adminOnly, async (req, res, next) => {
   try {
     if (req.params.id === req.user._id.toString()) {
       return res.status(400).json({ message: "You cannot delete yourself" });
