@@ -19,10 +19,17 @@ dotenv.config();
 const app = express();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const allowedOrigins = (process.env.CLIENT_URL || process.env.ALLOWED_ORIGINS || "")
+const defaultOrigins = ["https://project-mplby.vercel.app"];
+const configuredOrigins = [process.env.CLIENT_URL, process.env.ALLOWED_ORIGINS]
+  .filter(Boolean)
+  .join(",");
+const allowedOrigins = configuredOrigins
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+for (const origin of defaultOrigins) {
+  if (!allowedOrigins.includes(origin)) allowedOrigins.push(origin);
+}
 const devOrigins = [/^http:\/\/localhost:\d+$/, /^http:\/\/127\.0\.0\.1:\d+$/];
 
 app.set("trust proxy", 1);
