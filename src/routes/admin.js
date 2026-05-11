@@ -37,7 +37,8 @@ const damageLevels = ["minimal", "partial", "complete"];
 const debrisOptions = ["unknown", "no", "yes"];
 const languages = ["ar", "zh", "en", "fr", "ru", "es"];
 const adminOnly = [requireAuth, requireAdmin];
-const adminOrModerator = [requireAuth, requireRole("admin", "moderator")];
+const adminReadable = [requireAuth, requireRole("admin", "moderator", "demo")];
+const adminWritable = [requireAuth, requireRole("admin", "moderator")];
 
 function parseBoolean(value) {
   return value === true || value === "true" || value === "1" || value === 1;
@@ -205,8 +206,8 @@ router.post("/login", async (req, res, next) => {
       return res.status(403).json({ message: "Account banned" });
     }
 
-    if (!["admin", "moderator"].includes(user.role)) {
-      return res.status(403).json({ message: "Admin or moderator access required" });
+    if (!["admin", "moderator", "demo"].includes(user.role)) {
+      return res.status(403).json({ message: "Admin, moderator or demo access required" });
     }
 
     const isValid = await bcrypt.compare(password, user.password);
@@ -220,7 +221,7 @@ router.post("/login", async (req, res, next) => {
   }
 });
 
-router.use(requireAuth, requireRole("admin", "moderator"));
+router.use(requireAuth, requireRole("admin", "moderator", "demo"));
 
 router.post("/version-notifications", ...adminOnly, async (req, res, next) => {
   try {
@@ -257,7 +258,7 @@ router.post("/version-notifications", ...adminOnly, async (req, res, next) => {
   }
 });
 
-router.get("/stats", ...adminOrModerator, async (_req, res, next) => {
+router.get("/stats", ...adminReadable, async (_req, res, next) => {
   try {
     const [totalReports, totalUsers, pendingReports, verifiedReports, rejectedReports, damageRows, crisisRows, infrastructureRows, statusRows] = await Promise.all([
       Report.countDocuments(),
@@ -293,7 +294,7 @@ router.get("/stats", ...adminOrModerator, async (_req, res, next) => {
   }
 });
 
-router.get("/reports", ...adminOrModerator, async (req, res, next) => {
+router.get("/reports", ...adminReadable, async (req, res, next) => {
   try {
     const filter = {};
     if (req.query.status && statuses.includes(req.query.status)) filter.status = req.query.status;
@@ -363,7 +364,7 @@ router.post("/reports/import", ...adminOnly, async (req, res, next) => {
   }
 });
 
-router.patch("/reports/:id/approve", ...adminOrModerator, async (req, res, next) => {
+router.patch("/reports/:id/approve", ...adminWritable, async (req, res, next) => {
   try {
     const report = await Report.findByIdAndUpdate(
       req.params.id,
@@ -400,7 +401,7 @@ router.patch("/reports/:id/approve", ...adminOrModerator, async (req, res, next)
   }
 });
 
-router.patch("/reports/:id/reject", ...adminOrModerator, async (req, res, next) => {
+router.patch("/reports/:id/reject", ...adminWritable, async (req, res, next) => {
   try {
     const report = await Report.findByIdAndUpdate(
       req.params.id,
@@ -438,7 +439,7 @@ router.patch("/reports/:id/reject", ...adminOrModerator, async (req, res, next) 
   }
 });
 
-router.patch("/reports/:id/status", ...adminOrModerator, async (req, res, next) => {
+router.patch("/reports/:id/status", ...adminWritable, async (req, res, next) => {
   try {
     const { status } = req.body;
 
@@ -484,7 +485,7 @@ router.patch("/reports/:id/status", ...adminOrModerator, async (req, res, next) 
   }
 });
 
-router.patch("/reports/:id", ...adminOrModerator, upload.array("images", 3), async (req, res, next) => {
+router.patch("/reports/:id", ...adminWritable, upload.array("images", 3), async (req, res, next) => {
   try {
     const {
       title,
@@ -664,7 +665,7 @@ router.patch("/reports/:id", ...adminOrModerator, upload.array("images", 3), asy
   }
 });
 
-router.delete("/reports/:id", ...adminOrModerator, async (req, res, next) => {
+router.delete("/reports/:id", ...adminWritable, async (req, res, next) => {
   try {
     const report = await Report.findByIdAndDelete(req.params.id);
 
@@ -730,8 +731,8 @@ router.post("/users", ...adminOnly, async (req, res, next) => {
       return res.status(400).json({ message: "Enter a valid email address" });
     }
 
-    if (!["moderator", "admin"].includes(role)) {
-      return res.status(400).json({ message: "Only moderator or admin accounts can be created here" });
+    if (!["demo", "moderator", "admin"].includes(role)) {
+      return res.status(400).json({ message: "Only demo, moderator or admin accounts can be created here" });
     }
 
     if (String(password).length < 6) {

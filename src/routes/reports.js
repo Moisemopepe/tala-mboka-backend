@@ -414,7 +414,7 @@ router.get("/mine", requireAuth, async (req, res, next) => {
   }
 });
 
-router.get("/export/csv", requireAuth, requireRole("admin", "moderator"), async (req, res, next) => {
+router.get("/export/csv", requireAuth, requireRole("admin", "moderator", "demo"), async (req, res, next) => {
   try {
     const filter = req.query.crisisId ? { crisisId: req.query.crisisId } : {};
     const reports = await Report.find(filter).sort({ createdAt: -1 }).lean({ virtuals: true });
@@ -493,7 +493,7 @@ router.get("/export/csv", requireAuth, requireRole("admin", "moderator"), async 
   }
 });
 
-router.get("/export/geojson", requireAuth, requireRole("admin", "moderator"), async (req, res, next) => {
+router.get("/export/geojson", requireAuth, requireRole("admin", "moderator", "demo"), async (req, res, next) => {
   try {
     const filter = req.query.crisisId ? { crisisId: req.query.crisisId } : {};
     const reports = await Report.find(filter).sort({ createdAt: -1 }).lean({ virtuals: true });
